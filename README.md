@@ -190,3 +190,11 @@ To check the UI without hardware:
 swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch --dark
 # scenes: single, batch, lora, running, done, empty
 ```
+
+## Continuous integration
+
+CI runs the fake serial-node tests and release builds on macOS. It does not
+connect to hardware or flash devices.
+
+Default-branch changes go through a pull request with required checks.
+GitHub Actions dependencies are pinned and updated through Dependabot PRs.
