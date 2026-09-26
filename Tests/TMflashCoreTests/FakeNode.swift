@@ -19,6 +19,12 @@ final class FakeNode: @unchecked Sendable {
     var silent = false                     // never answers (not a TMsense)
     var refuse: String?                    // answer this setting with "invalid: …"
     var wifiJoins = true
+    /// Firmware with the direct-to-cloud transport (tmsense-1.4+): `caps`, `transport`, `cloud_url`.
+    var directCloud = true
+    /// With transport wss, the edge acknowledges a report after the reboot.
+    var edgeAccepts = true
+    /// The raw bytes of every line received, to prove a long line is sent whole.
+    private(set) var lineLengths: [Int] = []
 
     // Node state (RAM and "flash").
     private var ram: [String: String] = [:]
@@ -38,7 +44,7 @@ final class FakeNode: @unchecked Sendable {
         tcgetattr(s, &t); cfmakeraw(&t); tcsetattr(s, TCSANOW, &t)
         self.uid = uid
         ram = ["node_id": "(unset)", "mode": "wifi", "lora_gw": "(none)", "ssid": "(unset)", "password": "(unset)",
-               "edges": "(none) ", "key": "(unset - telemetry unsigned)"]
+               "edges": "(none) ", "key": "(unset - telemetry unsigned)", "transport": "udp", "cloud_url": "(none)"]
         saved = ram
     }
 
@@ -88,8 +94,11 @@ final class FakeNode: @unchecked Sendable {
                 if b == 0x0D { continue }
                 if b == 0x0A {
                     let text = String(decoding: line, as: UTF8.self)
+                    lock.lock(); lineLengths.append(line.count); lock.unlock()
+                    // TMsense discards a line of 160+ bytes whole (s_line[160]).
+                    if line.count >= 160 { say("line too long, ignored") }
+                    else if !text.isEmpty { handle(text) }
                     line.removeAll()
-                    if !text.isEmpty { handle(text) }
                 } else { line.append(b) }
             }
         }
@@ -102,9 +111,16 @@ final class FakeNode: @unchecked Sendable {
         case "show":
             lock.lock(); let r = ram; lock.unlock()
             say("uid       : \(uid)")
-            say("fw        : tmsense-1.1")
-            for k in ["node_id", "mode", "lora_gw", "ssid", "password", "edges", "key"] {
+            say("fw        : \(directCloud ? "tmsense-1.4" : "tmsense-1.1")")
+            var keys = ["node_id", "mode", "lora_gw", "ssid", "password", "edges", "key"]
+            if directCloud { keys += ["transport", "cloud_url"] }
+            for k in keys {
                 say("\(k.padding(toLength: 10, withPad: " ", startingAt: 0)): \(r[k] ?? "")")
+            }
+            if directCloud {
+                say("caps      : wss1,ota-https1")
+                say("uplink    : \(r["transport"] == "wss" ? "wss off" : "udp, wifi not joined")")
+                say("report_ack: \(r["transport"] == "wss" ? "never" : "n/a (udp has no acknowledgement)")")
             }
             say("boot      : 7   last_cmd: 0")
             say("param min_contrast = 50 centi-C")
@@ -120,6 +136,16 @@ final class FakeNode: @unchecked Sendable {
             case "pass": ram["password"] = "(set)"
             case "edges": ram["edges"] = value + " "
             case "key": ram["key"] = "(set)"
+            case "cloud_url" where directCloud:
+                guard value.hasPrefix("wss://"), value.count <= 128, !value.contains("?") else {
+                    lock.unlock(); say("invalid: cloud_url must start with wss://"); return
+                }
+                ram["cloud_url"] = value
+            case "transport" where directCloud:
+                if value == "wss" && ram["cloud_url"] == "(none)" { lock.unlock(); say("invalid: set cloud_url first"); return }
+                if value == "wss" && ram["mode"] != "wifi" { lock.unlock(); say("invalid: transport wss needs mode wifi"); return }
+                guard value == "udp" || value == "wss" else { lock.unlock(); say("invalid: transport must be udp or wss"); return }
+                ram["transport"] = value
             default: lock.unlock(); say("unknown setting"); return
             }
             lock.unlock()
@@ -134,6 +160,17 @@ final class FakeNode: @unchecked Sendable {
             say("[boot] uid     \(uid)   boot #8")
             lock.lock(); let joins = wifiJoins && ram["ssid"] != "(unset)" && ram["mode"] == "wifi"; lock.unlock()
             if joins { say("[wifi] connected ip=192.168.0.\(Int(uid.suffix(2), radix: 16) ?? 1) rssi=-55 dBm ch=6, commands on udp/5201") }
+            lock.lock(); let wss = joins && ram["transport"] == "wss"; let accepts = edgeAccepts; lock.unlock()
+            if wss {
+                say("[cloud] waiting-for-time")
+                say("[cloud] connecting")
+                if accepts {
+                    say("[cloud] ready")
+                    say("[cloud] report accepted by the edge")
+                } else {
+                    say("[cloud] backoff: tls: certificate refused")
+                }
+            }
         default:
             say("unknown command; try `help`")
         }

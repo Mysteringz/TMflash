@@ -228,8 +228,9 @@ struct SettingsForm: View {
             }
 
             FormSection("Uplink") {
-                Field("Mode", hint: model.settings.mode == .wifi ? "Node → TMWAccess over the site's Wi-Fi"
-                                                                  : "Node → TMLAccess over LoRa") {
+                Field("Mode", hint: model.settings.mode == .lora ? "Node → TMLAccess over LoRa"
+                                    : model.settings.transport == .wss ? "Node → TMedge over the site's Wi-Fi and the internet"
+                                    : "Node → TMWAccess over the site's Wi-Fi") {
                     HStack(spacing: 10) {
                         Text("Wi-Fi").foregroundStyle(model.settings.mode == .wifi ? .primary : .secondary)
                         Toggle("", isOn: Binding(get: { model.settings.mode == .lora },
@@ -251,8 +252,28 @@ struct SettingsForm: View {
                             RevealButton(on: $showPassword)
                         }
                     }
-                    Field("TMWAccess IP", hint: "The Wi-Fi gateway's LAN address") {
-                        TextField("e.g. 192.168.0.43", text: $model.settings.gateway).frame(width: 180)
+                    Field("Sends to", hint: model.settings.transport == .udp
+                          ? "A TMWAccess gateway on this site's network"
+                          : "TMedge in the cloud, over outbound HTTPS (443) — no gateway at the site") {
+                        Picker("", selection: $model.settings.transport) {
+                            Text("Local gateway").tag(UplinkTransport.udp)
+                            Text("Direct to cloud").tag(UplinkTransport.wss)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 260)
+                    }
+                    if model.settings.transport == .wss {
+                        Field("TMedge node URL", hint: "Its direct-node endpoint, wss://… /tmnode") {
+                            TextField("keep node's current", text: $model.settings.cloudURL).frame(width: 340)
+                        }
+                        Field("TMWAccess IP", hint: "Optional: kept on the node for a USB rollback to the local gateway") {
+                            TextField("keep node's current", text: $model.settings.gateway).frame(width: 180)
+                        }
+                        Notice(icon: "icloud", color: .blue,
+                               text: "Needs TMsense 1.4 or later: older firmware is refused before anything is written. After the reboot TMflash waits for TMedge to accept a report — joining Wi-Fi alone is not counted as success.")
+                    } else {
+                        Field("TMWAccess IP", hint: "The Wi-Fi gateway's LAN address") {
+                            TextField("e.g. 192.168.0.43", text: $model.settings.gateway).frame(width: 180)
+                        }
                     }
                 } else {
                     Field("TMLAccess IP", hint: "The LoRa gateway's address") {
