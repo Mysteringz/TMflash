@@ -84,7 +84,8 @@ final class AppModel: ObservableObject {
         refreshFirmwareVersion()
         refreshDevices()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshDevices() }
+            // Give the task its own weak capture across the actor boundary.
+            Task { @MainActor [weak self] in self?.refreshDevices() }
         }
     }
 
