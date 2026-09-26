@@ -21,14 +21,17 @@ the order they're listed.
 ┌ TMflash ─────────────────────────────────────── [Single node | Batch (up to 10)] ┐
 │ Device                │ NODE IDENTITY   Node ID [ 3 ]                             │
 │ (•) usbserial-0001    │ UPLINK          Mode  Wi-Fi (  ) LoRa                     │
-│     Silicon Labs CP210x│                 SSID [EsanHouse]  Password [••••]         │
-│     ✔ TMsense #3 · 30:ed:a0:… · tmsense-1.1                                       │
-│                       │                 TMWAccess IP [192.168.0.43]               │
+│     Silicon Labs CP210x│                 SSID [ExampleWiFi]  Password [••••]       │
+│     ✔ TMsense #3 · 02:00:00:… · tmsense-1.1                                       │
+│                       │                 TMWAccess IP [192.0.2.10]                 │
 │                       │ SECURITY        Signing key [••••]  ☑ remember in Keychain│
-│                       │ FIRMWARE        tmsense-1.1  ~/Desktop/IOT/TMsense        │
+│                       │ FIRMWARE        tmsense-1.1  /path/to/TMsense             │
 │                       │                                          [   Flash   ]    │
 └───────────────────────┴──────────────────────────────────────────────────────────┘
 ```
+
+Network names, addresses, device IDs and paths shown here are examples. Replace
+them with your site's values; `192.0.2.10` is a documentation-only address.
 
 ## Install
 
@@ -61,13 +64,13 @@ also installed, the same board appears a second time as
 **Single node**
 
 1. Plug in the board. It appears under **Device** and TMflash asks it what it
-   runs (e.g. *TMsense #3 · 30:ed:a0:cb:f5:f8 · tmsense-1.1*). Opening a
+   runs (e.g. *TMsense #3 · 02:00:00:00:00:03 · tmsense-1.1*). Opening a
    serial port restarts an ESP32, so identifying a board restarts it.
 2. Enter the **Node ID** (1–65535). Write the same number on the enclosure.
 3. Choose **Wi-Fi** or **LoRa**:
    - Wi-Fi: the SSID (2.4 GHz), the password, and the **TMWAccess IP**.
-     That's the Wi-Fi gateway's LAN address, e.g. `192.168.0.43` at
-     EsanHouse.
+     That's the Wi-Fi gateway's LAN address; replace the example
+     `192.0.2.10` with the address assigned at your site.
    - LoRa: the **TMLAccess IP**. *The firmware has no LoRa uplink yet.* A
      node in LoRa mode stores the setting and says so on its console, but it
      sends nothing until LoRa support ships. TMflash warns about this.
@@ -156,9 +159,9 @@ never from arguments, which would end up in shell history and `ps`:
 CLI=build/TMflash.app/Contents/MacOS/tmflash-cli      # or: swift run tmflash-cli
 $CLI ports --probe
 TMFLASH_PASSWORD=… TMFLASH_KEY=… $CLI flash --port /dev/cu.usbserial-0001 --id 3 \
-    --ssid EsanHouse --gateway 192.168.0.43
+    --ssid ExampleWiFi --gateway 192.0.2.10
 TMFLASH_PASSWORD=… TMFLASH_KEY=… $CLI batch --ports /dev/cu.usbserial-0001,/dev/cu.usbserial-0002 \
-    --start 11 --end 12 --ssid EsanHouse --gateway 192.168.0.43
+    --start 11 --end 12 --ssid ExampleWiFi --gateway 192.0.2.10
 ```
 
 ## Tests
