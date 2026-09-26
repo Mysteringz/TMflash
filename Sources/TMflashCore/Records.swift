@@ -9,18 +9,29 @@ public enum Manifest {
         return dir.appendingPathComponent("manifest.csv")
     }
 
-    static let header = "time,node_id,uid,mode,gateway,ssid,firmware,port,wifi_ip,result,notes\n"
+    /// New columns are appended at the end, so rows written by an older
+    /// TMflash still line up (their extra fields read as empty).
+    static let header = "time,node_id,uid,mode,gateway,ssid,firmware,port,wifi_ip,result,notes,transport,cloud_url,edge_accepted\n"
+    static let headerV1 = "time,node_id,uid,mode,gateway,ssid,firmware,port,wifi_ip,result,notes\n"
 
     public static func append(_ results: [JobResult], settings: NodeSettings, to url: URL = Manifest.url) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !fm.fileExists(atPath: url.path) { try header.write(to: url, atomically: true, encoding: .utf8) }
+        else if let existing = try? String(contentsOf: url, encoding: .utf8), existing.hasPrefix(headerV1) {
+            // A manifest from before direct cloud: widen its header, keep every row.
+            try (header + existing.dropFirst(headerV1.count)).write(to: url, atomically: true, encoding: .utf8)
+        }
         let now = ISO8601DateFormatter().string(from: Date())
         var text = ""
         for r in results {
             let fields: [String] = [now, String(r.job.nodeID), r.uid ?? "", settings.mode.rawValue, settings.gateway,
                                     settings.mode == .wifi ? settings.ssid : "", r.firmware ?? "", r.job.port, r.wifiIP ?? "",
-                                    r.ok ? "ok" : "failed", (r.error.map { [$0] } ?? r.warnings).joined(separator: "; ")]
+                                    r.ok ? "ok" : "failed", (r.error.map { [$0] } ?? r.warnings).joined(separator: "; "),
+                                    // What the node reports, not what was asked for.
+                                    (r.transport ?? (settings.mode == .wifi ? settings.transport : .udp)).rawValue,
+                                    r.cloudURL ?? "",
+                                    r.edgeAccepted.map { $0 ? "yes" : "no" } ?? ""]
             text += fields.map(csv).joined(separator: ",") + "\n"
         }
         let h = try FileHandle(forWritingTo: url)

@@ -51,6 +51,8 @@ private struct Summary: View {
         switch model.phase {
         case .finished where model.buildError != nil || model.failed > 0:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case .finished where model.rows.contains { $0.result?.edgeAccepted == false }:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.orange)
         case .finished: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         default: ProgressView().controlSize(.regular)
         }
@@ -62,6 +64,13 @@ private struct Summary: View {
         case .flashing: return model.rows.count == 1 ? "Setting up node #\(model.rows[0].nodeID)…" : "Setting up \(model.rows.count) nodes…"
         case .finished:
             if model.buildError != nil { return "Firmware build failed" }
+            // A direct-cloud node TMedge has not heard from is set up, not ready:
+            // it is delivering no occupancy, and the headline must not say otherwise.
+            let unheard = model.rows.filter { $0.result?.edgeAccepted == false }.count
+            if model.failed == 0 && unheard > 0 {
+                return model.rows.count == 1 ? "Node #\(model.rows[0].nodeID) is set up, but TMedge has not heard from it"
+                                             : "\(model.rows.count) nodes set up, \(unheard) not yet heard by TMedge"
+            }
             if model.failed == 0 { return model.rows.count == 1 ? "Node #\(model.rows[0].nodeID) is ready" : "All \(model.rows.count) nodes are ready" }
             return "\(model.succeeded) of \(model.rows.count) ready, \(model.failed) failed"
         case .setup: return ""
@@ -141,6 +150,8 @@ private struct JobCard: View {
         if let uid = row.result?.uid { parts.append(uid) }
         if let fw = row.result?.firmware { parts.append(fw) }
         if let ip = row.result?.wifiIP { parts.append("on Wi-Fi as \(ip)") }
+        // Separate facts: a Wi-Fi lease says nothing about TMedge.
+        if let accepted = row.result?.edgeAccepted { parts.append(accepted ? "TMedge accepted its reports" : "TMedge has not accepted a report") }
         if parts.isEmpty { return row.result == nil ? "In progress" : "Not set up" }
         return parts.joined(separator: " · ")
     }

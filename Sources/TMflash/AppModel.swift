@@ -73,6 +73,9 @@ final class AppModel: ObservableObject {
         s.mode = UplinkMode(rawValue: defaults.string(forKey: "uplink") ?? "") ?? .wifi
         s.ssid = defaults.string(forKey: "ssid") ?? ""
         s.gateway = defaults.string(forKey: s.mode == .wifi ? "wifiGateway" : "loraGateway") ?? ""
+        // Absent before direct cloud existed: UDP, as those nodes were.
+        s.transport = s.mode == .wifi ? UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp : .udp
+        s.cloudURL = defaults.string(forKey: "cloudURL") ?? ""
         if rememberSecrets {
             s.password = SecretStore.get("wifi-password") ?? ""
             s.key = SecretStore.get("signing-key") ?? ""
@@ -96,6 +99,8 @@ final class AppModel: ObservableObject {
         defaults.set(settings.mode.rawValue, forKey: "uplink")
         defaults.set(settings.ssid, forKey: "ssid")
         defaults.set(settings.gateway, forKey: settings.mode == .wifi ? "wifiGateway" : "loraGateway")
+        defaults.set(settings.transport.rawValue, forKey: "transport")
+        defaults.set(settings.cloudURL, forKey: "cloudURL")
         persistSecrets()
     }
 
@@ -115,6 +120,8 @@ final class AppModel: ObservableObject {
         var s = settings
         s.mode = m
         s.gateway = defaults.string(forKey: m == .wifi ? "wifiGateway" : "loraGateway") ?? ""
+        // LoRa has no direct-cloud transport; coming back to Wi-Fi restores the choice.
+        s.transport = m == .lora ? .udp : UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp
         settings = s
     }
 

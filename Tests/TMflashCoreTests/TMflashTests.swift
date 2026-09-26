@@ -205,6 +205,151 @@ final class PipelineTests: XCTestCase {
     }
 }
 
+final class DirectCloudTests: XCTestCase {
+    private let url = "wss://sense.hkumyseat.com/tmnode"
+
+    private func node(_ uid: String, cloud: Bool = true) throws -> FakeNode {
+        let f = try FakeNode(uid: uid)
+        f.directCloud = cloud
+        f.start()
+        return f
+    }
+
+    func testCloudURLsAreRefusedExactlyAsTheFirmwareRefusesThem() {
+        XCTAssertNil(NodeSettings.cloudURLProblem(url))
+        XCTAssertNil(NodeSettings.cloudURLProblem("wss://sense.hkumyseat.com:443/tmnode"))
+        for bad in ["ws://sense.hkumyseat.com/tmnode", "https://sense.hkumyseat.com/tmnode", "wss://sense.hkumyseat.com:8443/tmnode",
+                    "wss://u:p@sense.hkumyseat.com/tmnode", "wss://sense.hkumyseat.com/tmnode?k=1", "wss://sense.hkumyseat.com/tmnode#x",
+                    "wss://Sense.hkumyseat.com/tmnode", "wss://13.251.45.51/tmnode", "wss://sense.hkumyseat.com", "wss://sense.hkumyseat.com/",
+                    "wss://sense.hkumyseat.com/a/../b", "wss://sense.hkumyseat.com//x", "wss://sense.hkumyseat.com/tm node",
+                    "wss://sense.hkumyseat.com/tm%20node", "wss://-x.example.com/tmnode", ""] {
+            XCTAssertNotNil(NodeSettings.cloudURLProblem(bad), bad)
+        }
+        let longest = "wss://" + String(repeating: "a", count: 60) + ".example.com/" + String(repeating: "p", count: 49)
+        XCTAssertEqual(longest.utf8.count, 128)
+        XCTAssertNil(NodeSettings.cloudURLProblem(longest), "128 bytes is allowed, as on the node")
+        XCTAssertNotNil(NodeSettings.cloudURLProblem(longest + "p"), "129 is refused, never truncated")
+        XCTAssertEqual(NodeSettings.canonicalCloudURL(" WSS://Sense.HKUMySeat.com:443/tmnode "), url, "one canonical spelling is what is sent")
+        XCTAssertFalse(NodeSettings(mode: .lora, transport: .wss, cloudURL: url).problems().isEmpty, "LoRa has no wss")
+        XCTAssertFalse(NodeSettings(transport: .wss, cloudURL: "wss://x.example.com/a\nset key k").problems().isEmpty, "no line breaks")
+    }
+
+    func testSettingsSavedBeforeDirectCloudStillDecodeAsUDP() throws {
+        let old = #"{"mode":"wifi","ssid":"EsanHouse","password":"","gateway":"192.168.0.43","key":""}"#
+        let s = try JSONDecoder().decode(NodeSettings.self, from: Data(old.utf8))
+        XCTAssertEqual(s.transport, .udp)
+        XCTAssertEqual(s.cloudURL, "")
+        XCTAssertEqual(s.gateway, "192.168.0.43")
+        let round = try JSONDecoder().decode(NodeSettings.self, from: JSONEncoder().encode(NodeSettings(transport: .wss, cloudURL: url)))
+        XCTAssertEqual(round.transport, .wss)
+    }
+
+    func testCloudCommandsGoOnlyToFirmwareThatHasThem() {
+        let s = NodeSettings(ssid: "Net", transport: .wss, cloudURL: url)
+        XCTAssertEqual(ConsoleCommand.provisioning(id: 3, settings: s, directCloud: true).map(\.line),
+                       ["set id 3", "set mode wifi", "set ssid Net", "set cloud_url \(url)", "set transport wss", "save"],
+                       "the URL first: the firmware refuses transport wss without one")
+        XCTAssertFalse(ConsoleCommand.provisioning(id: 3, settings: NodeSettings(ssid: "Net"), directCloud: false).map(\.line)
+            .contains { $0.hasPrefix("set transport") || $0.hasPrefix("set cloud_url") }, "old firmware is never sent the new commands")
+        XCTAssertEqual(ConsoleCommand.provisioning(id: 4, settings: NodeSettings(mode: .lora, gateway: "10.0.0.3"), directCloud: true).map(\.line),
+                       ["set id 4", "set transport udp", "set mode lora", "set lora_gw 10.0.0.3", "save"])
+        let longest = "wss://" + String(repeating: "a", count: 60) + ".example.com/" + String(repeating: "p", count: 49)
+        let line = ConsoleCommand.provisioning(id: 1, settings: NodeSettings(transport: .wss, cloudURL: longest), directCloud: true)
+            .first { $0.line.hasPrefix("set cloud_url") }?.line ?? ""
+        XCTAssertLessThan(line.utf8.count, 160, "the longest URL still fits the firmware's console line")
+    }
+
+    func testDirectCloudProvisioningWaitsForTheEdgeNotJustWiFi() async throws {
+        let n = try node("30:ed:a0:00:01:01")
+        defer { n.stop() }
+        let r = await Pipeline.run(jobs: [DeviceJob(port: n.path, nodeID: 7)],
+                                   settings: NodeSettings(ssid: "Net", password: "password1", gateway: "192.168.0.43", key: "k", transport: .wss, cloudURL: url),
+                                   writer: nil, options: .init(bootTimeout: 5, wifiTimeout: 5, edgeTimeout: 5)) { _ in }
+        XCTAssertTrue(r[0].ok, r[0].error ?? "")
+        XCTAssertEqual(n.savedState["transport"], "wss")
+        XCTAssertEqual(n.savedState["cloud_url"], url)
+        XCTAssertEqual(n.savedState["edges"], "192.168.0.43 ", "the UDP destination is kept for a rollback")
+        XCTAssertNotNil(r[0].wifiIP)
+        XCTAssertEqual(r[0].edgeAccepted, true)
+        XCTAssertEqual(r[0].transport, .wss)
+    }
+
+    func testJoiningWiFiIsNotReportedAsReachingTheEdge() async throws {
+        let n = try node("30:ed:a0:00:01:02")
+        n.edgeAccepts = false
+        defer { n.stop() }
+        let r = await Pipeline.run(jobs: [DeviceJob(port: n.path, nodeID: 8)],
+                                   settings: NodeSettings(ssid: "Net", password: "password1", key: "k", transport: .wss, cloudURL: url),
+                                   writer: nil, options: .init(bootTimeout: 5, wifiTimeout: 5, edgeTimeout: 2)) { _ in }
+        XCTAssertNotNil(r[0].wifiIP, "it did join Wi-Fi")
+        XCTAssertEqual(r[0].edgeAccepted, false)
+        XCTAssertTrue(r[0].warnings.contains { $0.contains("did not accept a report") && $0.contains("certificate refused") }, r[0].warnings.joined())
+    }
+
+    func testOldFirmwareIsNeverQuietlyLeftOnUDPWhenCloudWasAskedFor() async throws {
+        let n = try node("30:ed:a0:00:01:03", cloud: false)
+        defer { n.stop() }
+        let r = await Pipeline.run(jobs: [DeviceJob(port: n.path, nodeID: 9)],
+                                   settings: NodeSettings(ssid: "Net", transport: .wss, cloudURL: url), writer: nil,
+                                   options: .init(bootTimeout: 5, wifiTimeout: 0)) { _ in }
+        XCTAssertFalse(r[0].ok)
+        XCTAssertEqual(r[0].error?.contains("no direct-to-cloud transport"), true)
+        XCTAssertTrue(n.commands.allSatisfy { $0 == "show" }, "nothing was written before the refusal")
+    }
+
+    func testOldFirmwareStillProvisionsForUDPExactlyAsBefore() async throws {
+        let n = try node("30:ed:a0:00:01:04", cloud: false)
+        defer { n.stop() }
+        let r = await Pipeline.run(jobs: [DeviceJob(port: n.path, nodeID: 10)],
+                                   settings: NodeSettings(ssid: "Net", password: "password1", gateway: "10.0.0.2", key: "k"), writer: nil,
+                                   options: .init(bootTimeout: 5, wifiTimeout: 5)) { _ in }
+        XCTAssertTrue(r[0].ok, r[0].error ?? "")
+        XCTAssertNil(r[0].edgeAccepted, "UDP has no acknowledgement to wait for")
+        XCTAssertFalse(n.commands.contains { $0.contains("transport") || $0.contains("cloud_url") })
+    }
+
+    func testBlankCloudFieldsKeepWhatTheNodeHas() async throws {
+        let n = try node("30:ed:a0:00:01:05")
+        defer { n.stop() }
+        _ = await Pipeline.run(jobs: [DeviceJob(port: n.path, nodeID: 11)],
+                               settings: NodeSettings(ssid: "Net", password: "password1", key: "k", transport: .wss, cloudURL: url), writer: nil,
+                               options: .init(bootTimeout: 5, wifiTimeout: 0)) { _ in }
+        // Re-provision later with the URL left blank: it stays.
+        let r = await Pipeline.run(jobs: [DeviceJob(port: n.path, nodeID: 11)],
+                                   settings: NodeSettings(transport: .wss), writer: nil, options: .init(bootTimeout: 5, wifiTimeout: 0)) { _ in }
+        XCTAssertTrue(r[0].ok, r[0].error ?? "")
+        XCTAssertEqual(n.savedState["cloud_url"], url)
+        XCTAssertEqual(n.savedState["password"], "(set)")
+    }
+
+    func testAnOverlongLineIsRefusedWholeByTheFirmware() throws {
+        let n = try node("30:ed:a0:00:01:06")
+        defer { n.stop() }
+        let port = try SerialPort(path: n.path)
+        defer { port.close() }
+        let console = NodeConsole(port: port, log: { _ in })
+        _ = try console.waitUntilReady(timeout: 5)
+        let long = ConsoleCommand(line: "set cloud_url wss://x.example.com/" + String(repeating: "a", count: 150), expect: "cloud_url updated", display: "long")
+        XCTAssertThrowsError(try console.run(long)) { XCTAssertTrue(String(describing: $0).contains("line too long")) }
+        XCTAssertEqual(n.savedState["cloud_url"], "(none)")
+    }
+
+    func testManifestFromBeforeDirectCloudIsWidenedNotBroken() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "manifest-\(UUID().uuidString).csv")
+        try (Manifest.headerV1 + "2026-09-20T00:00:00Z,3,30:ed:a0:cb:f5:f8,wifi,192.168.0.43,EsanHouse,tmsense-1.1,/dev/x,,ok,\n")
+            .write(to: url, atomically: true, encoding: .utf8)
+        var r = JobResult(job: DeviceJob(port: "/dev/y", nodeID: 4), uid: "aa:bb:cc:dd:ee:ff", firmware: "tmsense-1.4", wifiIP: "10.0.0.9")
+        r.transport = .wss
+        r.cloudURL = self.url
+        r.edgeAccepted = true
+        try Manifest.append([r], settings: NodeSettings(transport: .wss, cloudURL: self.url), to: url)
+        let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines[0] + "\n", Manifest.header)
+        XCTAssertTrue(lines[1].hasPrefix("2026-09-20T00:00:00Z,3,"), "the old row is kept")
+        XCTAssertTrue(lines[2].hasSuffix(",wss,\(self.url),yes"), lines[2])
+    }
+}
+
 final class LogBox: @unchecked Sendable {
     private let l = NSLock(); private var v: [String] = []
     func add(_ s: String) { l.lock(); v.append(s); l.unlock() }

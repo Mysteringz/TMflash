@@ -15,15 +15,19 @@ usage:
 options:
   --mode wifi|lora      uplink (default wifi)
   --ssid NAME           Wi-Fi network (wifi mode)
-  --gateway IP          TMWAccess IP (wifi) or TMLAccess IP (lora)
+  --gateway IP          TMWAccess IP (wifi) or TMLAccess IP (lora); with wss, kept for a USB rollback
+  --transport udp|wss   wifi only: local gateway (udp, default) or straight to TMedge (wss; TMsense 1.4+)
+  --cloud-url URL       TMedge's node endpoint for wss, e.g. wss://sense.example.com/tmnode
   --no-flash            only write settings (firmware already on the board)
   --no-wifi-check       don't reboot and wait for the node to join Wi-Fi
+  --no-edge-check       wss: don't wait for TMedge to accept a report after joining
   --project DIR         TMsense folder (default: $TMSENSE_DIR or ../TMsense)
   --esptool CMD         use CMD instead of esptool (testing)
 environment:
   TMFLASH_PASSWORD      Wi-Fi password
   TMFLASH_KEY           signing key (TMedge's TM_KEY)
 Blank settings keep what the node already has.
+Exit status: 0 all nodes set up (and, for wss, heard by TMedge); 1 otherwise.
 """
 
 func fail(_ msg: String) -> Never {
@@ -39,7 +43,7 @@ var flags = Set<String>()
 while let a = args.first {
     args.removeFirst()
     guard a.hasPrefix("--") else { fail("unexpected argument \(a)") }
-    if ["--probe", "--no-flash", "--no-wifi-check", "--help"].contains(a) { flags.insert(a); continue }
+    if ["--probe", "--no-flash", "--no-wifi-check", "--no-edge-check", "--help"].contains(a) { flags.insert(a); continue }
     guard let v = args.first else { fail("\(a) needs a value") }
     args.removeFirst()
     opts[a] = v
@@ -52,8 +56,10 @@ let out = FileHandle.standardOutput
 @MainActor func settingsFromArgs() -> NodeSettings {
     let env = ProcessInfo.processInfo.environment
     guard let mode = UplinkMode(rawValue: opts["--mode"] ?? "wifi") else { fail("--mode must be wifi or lora") }
+    guard let transport = UplinkTransport(rawValue: opts["--transport"] ?? "udp") else { fail("--transport must be udp or wss") }
     let s = NodeSettings(mode: mode, ssid: opts["--ssid"] ?? "", password: env["TMFLASH_PASSWORD"] ?? "",
-                         gateway: opts["--gateway"] ?? "", key: env["TMFLASH_KEY"] ?? "")
+                         gateway: opts["--gateway"] ?? "", key: env["TMFLASH_KEY"] ?? "", transport: transport,
+                         cloudURL: NodeSettings.canonicalCloudURL(opts["--cloud-url"] ?? ""))
     let p = s.problems()
     if !p.isEmpty { fail(p.joined(separator: "; ")) }
     return s
@@ -104,6 +110,7 @@ final class MacBox: @unchecked Sendable {
     let w = await writer()
     var options = PipelineOptions()
     if flags.contains("--no-wifi-check") { options.wifiTimeout = 0 }
+    if flags.contains("--no-edge-check") { options.edgeTimeout = 0 }
     let lastPct = PctBox()
     let results = await Pipeline.run(jobs: jobs, settings: settings, writer: w, options: options) { e in
         switch e {
@@ -122,13 +129,15 @@ final class MacBox: @unchecked Sendable {
     for r in results {
         let name = (r.job.port as NSString).lastPathComponent
         if r.ok {
-            say("OK    #\(r.job.nodeID)  \(r.uid ?? "?")  \(name)  \(r.firmware ?? "")\(r.wifiIP.map { "  wifi \($0)" } ?? "")\(r.warnings.isEmpty ? "" : "  (\(r.warnings.count) warning\(r.warnings.count == 1 ? "" : "s"))")")
+            let edge = r.edgeAccepted.map { $0 ? "  edge accepted" : "  edge NOT heard" } ?? ""
+            say("OK    #\(r.job.nodeID)  \(r.uid ?? "?")  \(name)  \(r.firmware ?? "")\(r.wifiIP.map { "  wifi \($0)" } ?? "")\(edge)\(r.warnings.isEmpty ? "" : "  (\(r.warnings.count) warning\(r.warnings.count == 1 ? "" : "s"))")")
         } else {
             say("FAIL  #\(r.job.nodeID)  \(name)  \(r.error ?? "")")
         }
     }
     say("manifest: \(Manifest.url.path)")
-    exit(results.allSatisfy(\.ok) ? 0 : 1)
+    // A wss node TMedge never heard is not a working node, whatever else went right.
+    exit(results.allSatisfy { $0.ok && $0.edgeAccepted != false } ? 0 : 1)
 }
 final class PctBox: @unchecked Sendable {
     private var m: [String: Int] = [:]; private let l = NSLock()
