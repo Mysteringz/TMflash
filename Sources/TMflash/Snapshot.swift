@@ -60,6 +60,30 @@ enum Snapshot {
             m.nodeIDText = "4"
             m.settings = NodeSettings(mode: .lora, gateway: "192.168.0.60", key: "k")
             m.probes = [boards[0].path: .tmsense(info)]
+        case "cloud":
+            m.devices = [boards[0]]
+            m.selectedPort = boards[0].path
+            m.nodeIDText = "3"
+            m.firmwareVersion = "tmsense-1.4"
+            m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k",
+                                      transport: .wss, cloudURL: "wss://sense.example.com/tmnode")
+            m.probes = [boards[0].path: .tmsense(NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.4", "node_id": "3", "mode": "wifi",
+                                                                   "transport": "udp", "caps": "wss1,ota-https1"]))]
+        case "cloud-done":
+            m.phase = .finished
+            m.devices = [boards[0], boards[1]]
+            m.rows = [AppModel.Row(port: boards[0].path, nodeID: 3), AppModel.Row(port: boards[1].path, nodeID: 4)]
+            var ok = JobResult(job: DeviceJob(port: boards[0].path, nodeID: 3), uid: "30:ed:a0:cb:f5:f8", firmware: "tmsense-1.4", wifiIP: "192.168.0.9")
+            ok.edgeAccepted = true
+            ok.transport = .wss
+            var no = JobResult(job: DeviceJob(port: boards[1].path, nodeID: 4), uid: "30:ed:a0:12:34:56", firmware: "tmsense-1.4", wifiIP: "192.168.0.12",
+                               warnings: ["joined Wi-Fi, but TMedge did not accept a report within 90 s (last error: upgrade refused (403)) — the node is not delivering occupancy yet"])
+            no.edgeAccepted = false
+            no.transport = .wss
+            m.rows[0].result = ok
+            m.rows[1].result = no
+            m.rows[0].stage = .done
+            m.rows[1].stage = .done
         case "running", "done":
             m.mode = .batch
             m.devices = boards

@@ -27,6 +27,7 @@ public enum JobStage: Equatable, Sendable {
     case connecting
     case provisioning
     case joiningWiFi
+    case reachingEdge
     case done
     case failed
 
@@ -37,6 +38,7 @@ public enum JobStage: Equatable, Sendable {
         case .connecting: return "Waiting for the node to boot"
         case .provisioning: return "Writing settings"
         case .joiningWiFi: return "Checking it joins Wi-Fi"
+        case .reachingEdge: return "Checking TMedge accepts its reports"
         case .done: return "Done"
         case .failed: return "Failed"
         }
@@ -48,6 +50,12 @@ public struct JobResult: Equatable, Sendable {
     public var uid: String?
     public var firmware: String?
     public var wifiIP: String?
+    /// Direct cloud only: TMedge acknowledged a report after provisioning.
+    /// nil = not checked (UDP, or the check was skipped).
+    public var edgeAccepted: Bool?
+    public var transport: UplinkTransport?
+    /// The node's cloud_url as it reports it (not a secret).
+    public var cloudURL: String?
     public var warnings: [String] = []
     public var error: String?
     public var ok: Bool { error == nil }
@@ -64,9 +72,13 @@ public struct PipelineOptions: Sendable {
     public var bootTimeout: TimeInterval = 25
     /// Reboot after saving and wait this long for the Wi-Fi join line; 0 = skip.
     public var wifiTimeout: TimeInterval = 30
-    public init(bootTimeout: TimeInterval = 25, wifiTimeout: TimeInterval = 30) {
+    /// Direct cloud: after joining Wi-Fi, wait this long for TMedge to accept
+    /// a report (time sync, TLS and authentication come first); 0 = skip.
+    public var edgeTimeout: TimeInterval = 90
+    public init(bootTimeout: TimeInterval = 25, wifiTimeout: TimeInterval = 30, edgeTimeout: TimeInterval = 90) {
         self.bootTimeout = bootTimeout
         self.wifiTimeout = wifiTimeout
+        self.edgeTimeout = edgeTimeout
     }
 }
 
@@ -110,6 +122,9 @@ public enum Pipeline {
             result.uid = r.info.uid ?? result.uid
             result.firmware = r.info.firmware
             result.wifiIP = r.ip
+            result.edgeAccepted = r.edgeAccepted
+            result.transport = r.info.transport
+            result.cloudURL = r.info.cloudURL
             result.warnings = r.warnings
             events(.stage(port: port, .done))
         } catch {
@@ -129,7 +144,7 @@ public enum Pipeline {
         }
     }
 
-    struct Provisioned: Sendable { let info: NodeInfo; let ip: String?; let warnings: [String] }
+    struct Provisioned: Sendable { let info: NodeInfo; let ip: String?; let edgeAccepted: Bool?; let warnings: [String] }
 
     static func provision(_ job: DeviceJob, settings: NodeSettings, options: PipelineOptions,
                           log: @escaping @Sendable (String) -> Void,
@@ -139,22 +154,41 @@ public enum Pipeline {
         let console = NodeConsole(port: port, log: log)
         let before = try console.waitUntilReady(timeout: options.bootTimeout)
         log("node \(before.uid ?? "?") running \(before.firmware ?? "unknown firmware")")
+        // Asked before anything is written: old firmware would answer
+        // `set transport` with "unknown setting" halfway through, or -- worse
+        // -- keep sending over UDP while the manifest says cloud.
+        if settings.mode == .wifi && settings.transport == .wss && !before.supportsDirectCloud {
+            throw SerialError("\(before.firmware ?? "this firmware") has no direct-to-cloud transport: flash the current TMsense, or choose the local gateway")
+        }
         stage(.provisioning)
-        for c in ConsoleCommand.provisioning(id: job.nodeID, settings: settings) { try console.run(c) }
+        for c in ConsoleCommand.provisioning(id: job.nodeID, settings: settings, directCloud: before.supportsDirectCloud) { try console.run(c) }
         let after = try console.show()
         let (errors, warnings) = after.verify(id: job.nodeID, settings: settings)
         if !errors.isEmpty { throw SerialError("verification failed: " + errors.joined(separator: "; ")) }
         var notes = warnings
         var ip: String?
+        var accepted: Bool?
         if settings.mode == .wifi && after.ssid != nil && options.wifiTimeout > 0 {
             stage(.joiningWiFi)
-            ip = try console.rebootAndWaitForWiFi(timeout: options.wifiTimeout)
+            let cloud = after.transport == .wss && options.edgeTimeout > 0
+            if cloud { log("then waiting up to \(Int(options.edgeTimeout)) s for TMedge to accept a report") }
+            let w = try console.rebootAndWatch(wifiTimeout: options.wifiTimeout, cloudTimeout: cloud ? options.edgeTimeout : 0)
+            ip = w.ip
             if let ip { log("joined \(after.ssid ?? "Wi-Fi") as \(ip)") }
             else { notes.append("did not join “\(after.ssid ?? "")” within \(Int(options.wifiTimeout)) s — check the SSID, password and signal") }
+            if cloud && ip != nil {
+                stage(.reachingEdge)
+                accepted = w.edgeAccepted
+                if w.edgeAccepted { log("TMedge accepted a report") }
+                else {
+                    notes.append("joined Wi-Fi, but TMedge did not accept a report within \(Int(options.edgeTimeout)) s" +
+                                 (w.cloudError.map { " (last error: \($0))" } ?? "") + " — the node is not delivering occupancy yet")
+                }
+            }
         } else {
             try console.reboot()
         }
         for w in notes { log("⚠︎ \(w)") }
-        return Provisioned(info: after, ip: ip, warnings: notes)
+        return Provisioned(info: after, ip: ip, edgeAccepted: accepted, warnings: notes)
     }
 }

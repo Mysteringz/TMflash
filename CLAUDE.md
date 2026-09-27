@@ -35,8 +35,14 @@ scripts/build-app.sh [install]
   only to the node's serial port and the Keychain; the CLI takes them from env.
 - **The console protocol is TMsense's** (`src/tm_settings.cpp`): `show` field
   names (`uid`, `fw`, `node_id`, `mode`, `lora_gw`, `ssid`, `password`,
-  `edges`, `key`, `boot`) and the `<name> updated` / `saved` replies. Change
-  both sides together.
+  `edges`, `key`, then from 1.4 `transport`, `cloud_url`, `caps`, `uplink`,
+  `report_ack`, then `boot`) and the `<name> updated` / `saved` replies.
+  Change both sides together.
+- **Ask the firmware before using new commands.** `caps` containing `wss1`
+  means it knows `transport`/`cloud_url`; without it nothing about transport
+  is sent, and a request for direct cloud is refused before any write.
+- **Wi-Fi joined is not success for direct cloud.** Only the node's
+  "[cloud] report accepted by the edge" line (an ACK) is.
 - **One image for every node** (`[env:tmflash]`, `TM_NO_NODE_CONFIG`); per-node
   values are provisioned, never compiled in.
 - The product binaries are `TMflash` and `tmflash-cli` — not `tmflash`, which
