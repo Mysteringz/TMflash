@@ -52,6 +52,7 @@ final class AppModel: ObservableObject {
     @Published var firmwareVersion: String?
 
     let toolchain: Toolchain?
+    let wifi: WiFiDiscovery
     private let defaults: UserDefaults
     private var runTask: Task<Void, Never>?
     private var pollTimer: Timer?
@@ -62,6 +63,7 @@ final class AppModel: ObservableObject {
     init(live: Bool = true, defaults: UserDefaults = .standard) {
         self.live = live
         self.defaults = defaults
+        wifi = WiFiDiscovery(live: live)
         toolchain = Toolchain.locate()
         guard live else { return }
         mode = Mode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .single

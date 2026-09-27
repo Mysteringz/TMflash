@@ -240,8 +240,8 @@ struct SettingsForm: View {
                     }
                 }
                 if model.settings.mode == .wifi {
-                    Field("Wi-Fi SSID", hint: "2.4 GHz network") {
-                        TextField("keep node's current", text: $model.settings.ssid).frame(width: 260)
+                    Field("Wi-Fi SSID") {
+                        WiFiSelection(ssid: $model.settings.ssid, discovery: model.wifi)
                     }
                     Field("Wi-Fi password") {
                         HStack {

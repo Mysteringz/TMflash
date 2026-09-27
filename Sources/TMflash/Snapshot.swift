@@ -44,6 +44,11 @@ enum Snapshot {
         m.projectDir = NSHomeDirectory() + "/Desktop/IOT/TMsense"
         m.firmwareVersion = "tmsense-1.1"
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
+        m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
+        m.wifi.state = .ready
+        if scene == "wifi-scanning" { m.wifi.networks = []; m.wifi.state = .scanning }
+        if scene == "wifi-empty" { m.wifi.networks = [] }
+        if scene == "wifi-denied" { m.wifi.updateAuthorization(.denied) }
         let info = NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.1", "node_id": "3", "mode": "wifi"])
         switch scene {
         case "empty":
