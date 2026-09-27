@@ -95,9 +95,10 @@ struct DevicePanel: View {
             HStack {
                 Text(model.mode == .single ? "Device" : "Devices").font(.headline)
                 if model.mode == .batch {
-                    Text("\(model.batchPorts.count)/\(NodeSettings.maxBatch)").font(.caption.monospacedDigit())
+                    Text("\(model.orderedBatchPorts.count)/\(model.devices.count)").font(.caption.monospacedDigit())
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .help("Selected boards / detected USB boards")
                 }
                 Spacer()
                 Button { model.probes = [:]; model.refreshDevices() } label: { Image(systemName: "arrow.clockwise") }
@@ -121,9 +122,7 @@ struct DevicePanel: View {
                 }
                 if model.mode == .batch {
                     HStack {
-                        Button("Select all") {
-                            for d in model.devices.prefix(NodeSettings.maxBatch) { model.batchPorts.insert(d.path) }
-                        }
+                        Button("Select all", action: model.selectAllBatch)
                         Button("None") { model.batchPorts = [] }
                     }
                     .controlSize(.small)
@@ -319,7 +318,9 @@ struct SettingsForm: View {
     private var batchHint: String {
         let n = model.orderedBatchPorts.count
         switch model.plan {
-        case .success(let jobs): return "\(jobs.count) board\(jobs.count == 1 ? "" : "s") → IDs \(jobs.map { String($0.nodeID) }.joined(separator: ", "))"
+        case .success(let jobs):
+            guard let first = jobs.first, let last = jobs.last else { return "Tick boards on the left; IDs go in list order" }
+            return jobs.count == 1 ? "1 board → ID \(first.nodeID)" : "\(jobs.count) boards → IDs \(first.nodeID)–\(last.nodeID)"
         case .failure: return n == 0 ? "Tick boards on the left; IDs go in list order" : "\(n) board\(n == 1 ? "" : "s") ticked: the range must hold \(n) ID\(n == 1 ? "" : "s")"
         }
     }

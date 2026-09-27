@@ -9,7 +9,11 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(try NodeSettings.batchIDs(start: 11, end: 20, deviceCount: 10).get(), Array(11...20))
         XCTAssertEqual(NodeSettings.batchIDs(start: 1, end: 3, deviceCount: 2), .failure(.countMismatch(ids: 3, devices: 2)))
         XCTAssertEqual(NodeSettings.batchIDs(start: 5, end: 4, deviceCount: 2), .failure(.reversed))
-        XCTAssertEqual(NodeSettings.batchIDs(start: 1, end: 11, deviceCount: 11), .failure(.tooMany(11)), "at most 10 at once")
+        XCTAssertEqual(try NodeSettings.batchIDs(start: 1, end: 16, deviceCount: 16).get(), Array(1...16), "all selected boards fit, even beyond ten")
+        XCTAssertEqual(try NodeSettings.batchIDs(start: 65520, end: 65535, deviceCount: 16).get(), Array(65520...65535))
+        XCTAssertEqual(NodeSettings.batchIDs(start: 65521, end: 65536, deviceCount: 16), .failure(.outOfRange))
+        XCTAssertEqual(NodeSettings.batchIDs(start: 1, end: 16, deviceCount: 15), .failure(.countMismatch(ids: 16, devices: 15)))
+        XCTAssertEqual(NodeSettings.batchIDs(start: 1, end: 1, deviceCount: 0), .failure(.countMismatch(ids: 1, devices: 0)))
         XCTAssertEqual(NodeSettings.batchIDs(start: 0, end: 1, deviceCount: 2), .failure(.outOfRange))
         XCTAssertEqual(NodeSettings.batchIDs(start: nil, end: 1, deviceCount: 1), .failure(.missing))
     }
@@ -131,16 +135,16 @@ final class PipelineTests: XCTestCase {
         }
     }
 
-    func testTenBoardsAtOnceEachGetTheirOwnID() async throws {
-        let nodes = try fakes(10)
+    func testSixteenBoardsAtOnceEachGetTheirOwnID() async throws {
+        let nodes = try fakes(16)
         defer { nodes.forEach { $0.stop() } }
-        let ids = try NodeSettings.batchIDs(start: 101, end: 110, deviceCount: 10).get()
+        let ids = try NodeSettings.batchIDs(start: 101, end: 116, deviceCount: nodes.count).get()
         let jobs = zip(nodes, ids).map { DeviceJob(port: $0.path, nodeID: $1) }
         let settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "secret-pass", gateway: "192.168.0.43", key: "k")
         let writer = FakeWriter(nodes: Dictionary(uniqueKeysWithValues: nodes.map { ($0.path, $0) }))
         let t0 = Date()
         let results = await Pipeline.run(jobs: jobs, settings: settings, writer: writer, options: .init(bootTimeout: 5, wifiTimeout: 5)) { _ in }
-        XCTAssertEqual(results.map(\.ok), Array(repeating: true, count: 10), results.compactMap(\.error).joined(separator: "\n"))
+        XCTAssertEqual(results.map(\.ok), Array(repeating: true, count: nodes.count), results.compactMap(\.error).joined(separator: "\n"))
         for (node, id) in zip(nodes, ids) {
             XCTAssertEqual(node.savedState["node_id"], String(id), "IDs follow port order")
             XCTAssertEqual(node.savedState["edges"], "192.168.0.43 ")

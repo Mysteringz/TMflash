@@ -136,7 +136,7 @@ public enum Pipeline {
         return result
     }
 
-    /// Serial I/O blocks; keep it off Swift's cooperative threads, which ten
+    /// Serial I/O blocks; keep it off Swift's cooperative threads, which many
     /// boards waiting on boot could otherwise exhaust.
     static func blocking<T: Sendable>(_ f: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { c in

@@ -37,7 +37,7 @@ enum Snapshot {
     }
 
     static func populate(_ m: AppModel, scene: String) {
-        let boards = (1...4).map {
+        let boards = (1...(scene == "batch-large" ? 16 : 4)).map {
             SerialDevice(path: "/dev/cu.usbserial-000\(String($0))", vendorID: 0x10C4, productID: 0xEA60, product: "CP2102 USB to UART Bridge Controller",
                          serialNumber: "000\(String($0))", locationID: $0)
         }
@@ -53,12 +53,17 @@ enum Snapshot {
         switch scene {
         case "empty":
             m.devices = []
-        case "batch":
+        case "batch", "batch-large":
             m.mode = .batch
             m.devices = boards
             m.batchPorts = Set(boards.prefix(3).map(\.path))
             m.startIDText = "11"; m.endIDText = "13"
             m.probes = [boards[0].path: .tmsense(info), boards[1].path: .noAnswer, boards[2].path: .noAnswer, boards[3].path: .checking]
+            if scene == "batch-large" {
+                m.selectAllBatch()
+                m.endIDText = "26"
+                m.probes = Dictionary(uniqueKeysWithValues: boards.map { ($0.path, .noAnswer) })
+            }
         case "lora":
             m.devices = [boards[0]]
             m.selectedPort = boards[0].path

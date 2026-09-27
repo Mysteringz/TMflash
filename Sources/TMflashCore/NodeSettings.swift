@@ -69,7 +69,6 @@ public struct NodeSettings: Equatable, Codable, Sendable {
     /// TMsense TM_CLOUD_URL_MAX: ASCII bytes, never truncated.
     public static let maxCloudURL = 128
     public static let idRange = 1...65535
-    public static let maxBatch = 10
 
     /// Human-readable problems; empty means these settings can be written.
     public func problems() -> [String] {
@@ -161,19 +160,17 @@ public struct NodeSettings: Equatable, Codable, Sendable {
         guard idRange.contains(start), idRange.contains(end) else { return .failure(.outOfRange) }
         guard end >= start else { return .failure(.reversed) }
         let n = end - start + 1
-        guard n <= maxBatch else { return .failure(.tooMany(n)) }
         guard n == deviceCount else { return .failure(.countMismatch(ids: n, devices: deviceCount)) }
         return .success(Array(start...end))
     }
 
     public enum BatchError: Error, Equatable, CustomStringConvertible {
-        case missing, outOfRange, reversed, tooMany(Int), countMismatch(ids: Int, devices: Int)
+        case missing, outOfRange, reversed, countMismatch(ids: Int, devices: Int)
         public var description: String {
             switch self {
             case .missing: return "Enter a starting and an ending ID"
             case .outOfRange: return "IDs must be \(idRange.lowerBound)–\(idRange.upperBound)"
             case .reversed: return "The ending ID is lower than the starting ID"
-            case .tooMany(let n): return "\(n) IDs — at most \(maxBatch) nodes at a time"
             case let .countMismatch(ids, devices):
                 return "\(ids) ID\(ids == 1 ? "" : "s") for \(devices) selected device\(devices == 1 ? "" : "s") — they must match"
             }

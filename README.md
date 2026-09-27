@@ -13,12 +13,12 @@ Imager. Plug in a board, enter its node ID, scan and select its Wi-Fi network, a
 4. **checks** it: reads the settings back and verifies them, then restarts
    the node and waits until it joins the Wi-Fi.
 
-**Batch mode** does the same for up to 10 boards at once, in parallel. You
+**Batch mode** does the same for all selected boards at once, in parallel. You
 give a starting and an ending node ID, and the boards get consecutive IDs in
 the order they're listed.
 
 ```
-┌ TMflash ─────────────────────────────────────── [Single node | Batch (up to 10)] ┐
+┌ TMflash ────────────────────────────────────────────── [Single node | Batch] ────┐
 │ Device                │ NODE IDENTITY   Node ID [ 3 ]                             │
 │ (•) usbserial-0001    │ UPLINK          Mode  Wi-Fi (  ) LoRa                     │
 │     Silicon Labs CP210x│                 SSID [ExampleWiFi]  Password [••••]       │
@@ -92,12 +92,18 @@ the saved SSID untouched. A rescan never changes your selection. The selected
 SSID and entered password are provisioned over USB after flashing; in batch
 mode they apply to every selected board.
 
-**Batch (up to 10)**
+**Batch**
 
 Tick the boards, then enter **Node IDs from … to …**. The range must hold
 exactly as many IDs as there are ticked boards. Each board shows its ID badge
 before you start. They're flashed and checked in parallel, and a failure on
 one board never stops the others.
+
+The available batch size follows the USB boards detected by the Mac, including
+boards connected through hubs. **Select all** selects every detected board,
+and the device counter shows selected / detected boards. There is no fixed
+10-board cap; the host's USB connections and resources determine how many
+boards can be used. Node IDs must still be distinct and within 1–65535.
 
 **Results**
 
@@ -189,7 +195,7 @@ These tests check claims about behaviour. The pipeline tests run the real
 serial code against **fake TMsense nodes on pseudo-terminals**, which speak
 the firmware's console. They cover:
 
-- ten boards at once, each getting its own ID;
+- sixteen boards at once, each getting its own ID;
 - one bad board not stopping the others;
 - a silent board failing instead of hanging;
 - secrets never reaching the log;
@@ -208,7 +214,7 @@ To check the UI without hardware:
 
 ```sh
 swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch --dark
-# scenes: single, batch, lora, cloud, cloud-done, running, done, empty, wifi-scanning, wifi-empty, wifi-denied
+# scenes: single, batch, batch-large, lora, cloud, cloud-done, running, done, empty, wifi-scanning, wifi-empty, wifi-denied
 ```
 
 ## Continuous integration

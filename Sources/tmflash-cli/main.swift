@@ -11,7 +11,7 @@ usage:
   tmflash-cli build [--project DIR]           build the TMsense release image
   tmflash-cli flash --port P --id N [options] flash + provision one node
   tmflash-cli batch --ports P1,P2,... --start N --end M [options]
-                                          flash + provision up to 10 nodes at once, IDs N..M in port order
+                                          flash + provision all supplied nodes at once, IDs N..M in port order
 options:
   --mode wifi|lora      uplink (default wifi)
   --ssid NAME           Wi-Fi network (wifi mode)
