@@ -24,7 +24,9 @@ enum Snapshot {
         }
 
         let view = NSHostingView(rootView: ContentView().environmentObject(model))
-        let size = NSSize(width: 900, height: 800)
+        // A taller window for scenes whose form runs past the usual height,
+        // so a snapshot shows the whole of it rather than a cropped hint.
+        let size = NSSize(width: 900, height: scene == "tall" ? 1250 : 800)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = view
@@ -46,6 +48,12 @@ enum Snapshot {
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
         m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
         m.wifi.state = .ready
+        if scene == "tall" {
+            m.registerWithEdge = true
+            m.edgeURL = "https://sense.hkumyseat.com"
+            m.edgeToken = String(repeating: "t", count: 32)
+            m.edgeCheck = "Connected. The token is accepted."
+        }
         if scene == "hotspot" {
             m.settings.ssid = ""
             m.wifi.networks = [WiFiNetwork(ssid: "Phone Hotspot", rssi: -45, band: .fiveGHz)]

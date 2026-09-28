@@ -47,6 +47,21 @@ final class AppModel: ObservableObject {
     @Published var settings = NodeSettings() { didSet { persistSettings() } }
     @Published var rememberSecrets = true { didSet { defaults.set(rememberSecrets, forKey: "rememberSecrets"); persistSecrets() } }
     @Published var flashFirmware = true
+
+    /// Where to ask for a flashed node to be admitted, and the token that
+    /// buys the right to ask. The URL is ordinary configuration; the token
+    /// is a secret and lives only in the Keychain.
+    @Published var edgeURL = "" { didSet { defaults.set(edgeURL, forKey: "edgeURL") } }
+    @Published var edgeToken = "" { didSet { persistEdgeToken() } }
+    @Published var registerWithEdge = false { didSet { defaults.set(registerWithEdge, forKey: "registerWithEdge") } }
+    /// Result of the last Test, for the person setting this up.
+    @Published var edgeCheck: String?
+    @Published var edgeChecking = false
+
+    var edgeServer: EdgeServer? {
+        let s = EdgeServer(url: edgeURL, token: edgeToken)
+        return registerWithEdge && s.isConfigured ? s : nil
+    }
     @Published var projectDir: String? { didSet { defaults.set(projectDir, forKey: "projectDir") } }
 
     // Run
@@ -87,6 +102,9 @@ final class AppModel: ObservableObject {
             s.password = SecretStore.get("wifi-password") ?? ""
             s.key = SecretStore.get("signing-key") ?? ""
         }
+        edgeURL = defaults.string(forKey: "edgeURL") ?? ""
+        registerWithEdge = defaults.bool(forKey: "registerWithEdge")
+        edgeToken = SecretStore.get("edge-token") ?? ""
         settings = s
         let hint = Bundle.main.object(forInfoDictionaryKey: "TMSenseDir") as? String
         projectDir = defaults.string(forKey: "projectDir").flatMap { FirmwareProject.isProject($0) ? $0 : nil }
@@ -109,6 +127,30 @@ final class AppModel: ObservableObject {
         defaults.set(settings.transport.rawValue, forKey: "transport")
         defaults.set(settings.cloudURL, forKey: "cloudURL")
         persistSecrets()
+    }
+
+    private var lastEdgeToken: String?
+    private func persistEdgeToken() {
+        guard live else { return }
+        if lastEdgeToken == edgeToken { return }
+        lastEdgeToken = edgeToken
+        SecretStore.set("edge-token", edgeToken)
+    }
+
+    /// Ask the edge whether it is there and whether it likes the token.
+    func checkEdge() {
+        let server = EdgeServer(url: edgeURL, token: edgeToken)
+        guard server.isConfigured else {
+            edgeCheck = "Enter the console URL and a token first."
+            return
+        }
+        edgeChecking = true
+        edgeCheck = nil
+        Task { @MainActor [weak self] in
+            let answer = await EdgeClient.check(server)
+            self?.edgeCheck = answer
+            self?.edgeChecking = false
+        }
     }
 
     private var lastSecrets: (String, String)?
@@ -266,7 +308,8 @@ final class AppModel: ObservableObject {
             }
             if Task.isCancelled { phase = .finished; return }
             phase = .flashing
-            let results = await Pipeline.run(jobs: jobs, settings: settings, writer: writer) { e in
+            let options = PipelineOptions(server: edgeServer)
+            let results = await Pipeline.run(jobs: jobs, settings: settings, writer: writer, options: options) { e in
                 // Main-queue hops keep events in order.
                 DispatchQueue.main.async { self.apply(e) }
             }
