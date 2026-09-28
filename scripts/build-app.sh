@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 TMSENSE=$(cd "$ROOT/../TMsense" 2>/dev/null && pwd || true)
-VERSION=1.0.0
+VERSION=1.1.1
 
 swift build -c release --product TMflash
 swift build -c release --product tmflash-cli
@@ -47,6 +47,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocationUsageDescription</key><string>TMflash needs permission to show nearby Wi-Fi network names so you can choose a 2.4 GHz network for TMsense.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>TMflash needs permission to show nearby Wi-Fi network names so you can choose a 2.4 GHz network for TMsense.</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>TMSenseDir</key><string>$TMSENSE</string>
 </dict>

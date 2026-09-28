@@ -6,8 +6,13 @@ import TMflashCore
 @MainActor
 final class AppModel: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
-        case single = "Single node", batch = "Batch (up to 10)"
+        case single = "Single node", batch = "Batch"
         var id: String { rawValue }
+
+        init(persistedValue: String?) {
+            // The old display title was also the stored preference.
+            self = persistedValue == "Batch (up to 10)" ? .batch : Self(rawValue: persistedValue ?? "") ?? .single
+        }
     }
 
     enum ProbeState: Equatable {
@@ -42,6 +47,21 @@ final class AppModel: ObservableObject {
     @Published var settings = NodeSettings() { didSet { persistSettings() } }
     @Published var rememberSecrets = true { didSet { defaults.set(rememberSecrets, forKey: "rememberSecrets"); persistSecrets() } }
     @Published var flashFirmware = true
+
+    /// Where to ask for a flashed node to be admitted, and the token that
+    /// buys the right to ask. The URL is ordinary configuration; the token
+    /// is a secret and lives only in the Keychain.
+    @Published var edgeURL = "" { didSet { defaults.set(edgeURL, forKey: "edgeURL") } }
+    @Published var edgeToken = "" { didSet { persistEdgeToken() } }
+    @Published var registerWithEdge = false { didSet { defaults.set(registerWithEdge, forKey: "registerWithEdge") } }
+    /// Result of the last Test, for the person setting this up.
+    @Published var edgeCheck: String?
+    @Published var edgeChecking = false
+
+    var edgeServer: EdgeServer? {
+        let s = EdgeServer(url: edgeURL, token: edgeToken)
+        return registerWithEdge && s.isConfigured ? s : nil
+    }
     @Published var projectDir: String? { didSet { defaults.set(projectDir, forKey: "projectDir") } }
 
     // Run
@@ -52,6 +72,7 @@ final class AppModel: ObservableObject {
     @Published var firmwareVersion: String?
 
     let toolchain: Toolchain?
+    let wifi: WiFiDiscovery
     private let defaults: UserDefaults
     private var runTask: Task<Void, Never>?
     private var pollTimer: Timer?
@@ -62,9 +83,10 @@ final class AppModel: ObservableObject {
     init(live: Bool = true, defaults: UserDefaults = .standard) {
         self.live = live
         self.defaults = defaults
+        wifi = WiFiDiscovery(live: live)
         toolchain = Toolchain.locate()
         guard live else { return }
-        mode = Mode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .single
+        mode = Mode(persistedValue: defaults.string(forKey: "mode"))
         nodeIDText = defaults.string(forKey: "nodeID") ?? ""
         startIDText = defaults.string(forKey: "startID") ?? ""
         endIDText = defaults.string(forKey: "endID") ?? ""
@@ -73,10 +95,16 @@ final class AppModel: ObservableObject {
         s.mode = UplinkMode(rawValue: defaults.string(forKey: "uplink") ?? "") ?? .wifi
         s.ssid = defaults.string(forKey: "ssid") ?? ""
         s.gateway = defaults.string(forKey: s.mode == .wifi ? "wifiGateway" : "loraGateway") ?? ""
+        // Absent before direct cloud existed: UDP, as those nodes were.
+        s.transport = s.mode == .wifi ? UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp : .udp
+        s.cloudURL = defaults.string(forKey: "cloudURL") ?? ""
         if rememberSecrets {
             s.password = SecretStore.get("wifi-password") ?? ""
             s.key = SecretStore.get("signing-key") ?? ""
         }
+        edgeURL = defaults.string(forKey: "edgeURL") ?? ""
+        registerWithEdge = defaults.bool(forKey: "registerWithEdge")
+        edgeToken = SecretStore.get("edge-token") ?? ""
         settings = s
         let hint = Bundle.main.object(forInfoDictionaryKey: "TMSenseDir") as? String
         projectDir = defaults.string(forKey: "projectDir").flatMap { FirmwareProject.isProject($0) ? $0 : nil }
@@ -96,7 +124,33 @@ final class AppModel: ObservableObject {
         defaults.set(settings.mode.rawValue, forKey: "uplink")
         defaults.set(settings.ssid, forKey: "ssid")
         defaults.set(settings.gateway, forKey: settings.mode == .wifi ? "wifiGateway" : "loraGateway")
+        defaults.set(settings.transport.rawValue, forKey: "transport")
+        defaults.set(settings.cloudURL, forKey: "cloudURL")
         persistSecrets()
+    }
+
+    private var lastEdgeToken: String?
+    private func persistEdgeToken() {
+        guard live else { return }
+        if lastEdgeToken == edgeToken { return }
+        lastEdgeToken = edgeToken
+        SecretStore.set("edge-token", edgeToken)
+    }
+
+    /// Ask the edge whether it is there and whether it likes the token.
+    func checkEdge() {
+        let server = EdgeServer(url: edgeURL, token: edgeToken)
+        guard server.isConfigured else {
+            edgeCheck = "Enter the console URL and a token first."
+            return
+        }
+        edgeChecking = true
+        edgeCheck = nil
+        Task { @MainActor [weak self] in
+            let answer = await EdgeClient.check(server)
+            self?.edgeCheck = answer
+            self?.edgeChecking = false
+        }
     }
 
     private var lastSecrets: (String, String)?
@@ -115,6 +169,8 @@ final class AppModel: ObservableObject {
         var s = settings
         s.mode = m
         s.gateway = defaults.string(forKey: m == .wifi ? "wifiGateway" : "loraGateway") ?? ""
+        // LoRa has no direct-cloud transport; coming back to Wi-Fi restores the choice.
+        s.transport = m == .lora ? .udp : UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp
         settings = s
     }
 
@@ -170,7 +226,11 @@ final class AppModel: ObservableObject {
 
     func toggleBatch(_ path: String) {
         if batchPorts.contains(path) { batchPorts.remove(path) }
-        else if batchPorts.count < NodeSettings.maxBatch { batchPorts.insert(path) }
+        else if devices.contains(where: { $0.path == path }) { batchPorts.insert(path) }
+    }
+
+    func selectAllBatch() {
+        batchPorts = Set(devices.map(\.path))
     }
 
     /// The jobs to run, or why there are none yet.
@@ -248,7 +308,8 @@ final class AppModel: ObservableObject {
             }
             if Task.isCancelled { phase = .finished; return }
             phase = .flashing
-            let results = await Pipeline.run(jobs: jobs, settings: settings, writer: writer) { e in
+            let options = PipelineOptions(server: edgeServer)
+            let results = await Pipeline.run(jobs: jobs, settings: settings, writer: writer, options: options) { e in
                 // Main-queue hops keep events in order.
                 DispatchQueue.main.async { self.apply(e) }
             }

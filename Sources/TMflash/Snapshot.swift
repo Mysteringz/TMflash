@@ -24,7 +24,9 @@ enum Snapshot {
         }
 
         let view = NSHostingView(rootView: ContentView().environmentObject(model))
-        let size = NSSize(width: 900, height: 800)
+        // A taller window for scenes whose form runs past the usual height,
+        // so a snapshot shows the whole of it rather than a cropped hint.
+        let size = NSSize(width: 900, height: scene == "tall" ? 1250 : 800)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = view
@@ -37,29 +39,73 @@ enum Snapshot {
     }
 
     static func populate(_ m: AppModel, scene: String) {
-        let boards = (1...4).map {
+        let boards = (1...(scene == "batch-large" ? 16 : 4)).map {
             SerialDevice(path: "/dev/cu.usbserial-000\(String($0))", vendorID: 0x10C4, productID: 0xEA60, product: "CP2102 USB to UART Bridge Controller",
                          serialNumber: "000\(String($0))", locationID: $0)
         }
         m.projectDir = NSHomeDirectory() + "/Desktop/IOT/TMsense"
         m.firmwareVersion = "tmsense-1.1"
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
+        m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
+        m.wifi.state = .ready
+        if scene == "tall" {
+            m.registerWithEdge = true
+            m.edgeURL = "https://sense.hkumyseat.com"
+            m.edgeToken = String(repeating: "t", count: 32)
+            m.edgeCheck = "Connected. The token is accepted."
+        }
+        if scene == "hotspot" {
+            m.settings.ssid = ""
+            m.wifi.networks = [WiFiNetwork(ssid: "Phone Hotspot", rssi: -45, band: .fiveGHz)]
+        }
+        if scene == "wifi-scanning" { m.wifi.networks = []; m.wifi.state = .scanning }
+        if scene == "wifi-empty" { m.wifi.networks = [] }
+        if scene == "wifi-denied" { m.wifi.updateAuthorization(.denied) }
         let info = NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.1", "node_id": "3", "mode": "wifi"])
         switch scene {
         case "empty":
             m.devices = []
-        case "batch":
+        case "batch", "batch-large":
             m.mode = .batch
             m.devices = boards
             m.batchPorts = Set(boards.prefix(3).map(\.path))
             m.startIDText = "11"; m.endIDText = "13"
             m.probes = [boards[0].path: .tmsense(info), boards[1].path: .noAnswer, boards[2].path: .noAnswer, boards[3].path: .checking]
+            if scene == "batch-large" {
+                m.selectAllBatch()
+                m.endIDText = "26"
+                m.probes = Dictionary(uniqueKeysWithValues: boards.map { ($0.path, .noAnswer) })
+            }
         case "lora":
             m.devices = [boards[0]]
             m.selectedPort = boards[0].path
             m.nodeIDText = "4"
             m.settings = NodeSettings(mode: .lora, gateway: "192.168.0.60", key: "k")
             m.probes = [boards[0].path: .tmsense(info)]
+        case "cloud":
+            m.devices = [boards[0]]
+            m.selectedPort = boards[0].path
+            m.nodeIDText = "3"
+            m.firmwareVersion = "tmsense-1.4"
+            m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k",
+                                      transport: .wss, cloudURL: "wss://sense.example.com/tmnode")
+            m.probes = [boards[0].path: .tmsense(NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.4", "node_id": "3", "mode": "wifi",
+                                                                   "transport": "udp", "caps": "wss1,ota-https1"]))]
+        case "cloud-done":
+            m.phase = .finished
+            m.devices = [boards[0], boards[1]]
+            m.rows = [AppModel.Row(port: boards[0].path, nodeID: 3), AppModel.Row(port: boards[1].path, nodeID: 4)]
+            var ok = JobResult(job: DeviceJob(port: boards[0].path, nodeID: 3), uid: "30:ed:a0:cb:f5:f8", firmware: "tmsense-1.4", wifiIP: "192.168.0.9")
+            ok.edgeAccepted = true
+            ok.transport = .wss
+            var no = JobResult(job: DeviceJob(port: boards[1].path, nodeID: 4), uid: "30:ed:a0:12:34:56", firmware: "tmsense-1.4", wifiIP: "192.168.0.12",
+                               warnings: ["joined Wi-Fi, but TMedge did not accept a report within 90 s (last error: upgrade refused (403)) — the node is not delivering occupancy yet"])
+            no.edgeAccepted = false
+            no.transport = .wss
+            m.rows[0].result = ok
+            m.rows[1].result = no
+            m.rows[0].stage = .done
+            m.rows[1].stage = .done
         case "running", "done":
             m.mode = .batch
             m.devices = boards

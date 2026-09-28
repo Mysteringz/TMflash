@@ -19,6 +19,13 @@ public struct NodeInfo: Equatable, Sendable {
         return e
     }
     public var loraGateway: String? { fields["lora_gw"].flatMap { $0 == "(none)" ? nil : $0 } }
+    /// What the firmware says it can do (`caps : wss1,ota-https1`); empty on older firmware.
+    public var capabilities: Set<String> { Set((fields["caps"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }) }
+    /// The firmware has the direct-to-cloud transport and its settings.
+    public var supportsDirectCloud: Bool { capabilities.contains("wss1") }
+    /// No `transport` line means firmware from before direct cloud: UDP.
+    public var transport: UplinkTransport { fields["transport"].flatMap(UplinkTransport.init(rawValue:)) ?? .udp }
+    public var cloudURL: String? { fields["cloud_url"].flatMap { $0 == "(none)" ? nil : $0 } }
 
     /// Parses one console line; nil for anything that is not a `show` field
     /// (frame logs, `param` lines, boot banner).
@@ -44,7 +51,16 @@ public struct NodeInfo: Equatable, Sendable {
             if !s.gateway.isEmpty && edge != s.gateway { errors.append("TMWAccess IP reads \(edge ?? "nothing"), expected \(s.gateway)") }
             if ssid == nil { warnings.append("no Wi-Fi SSID on the node") }
             if !passwordSet { warnings.append("no Wi-Fi password on the node") }
-            if edge == nil { warnings.append("no TMWAccess IP on the node: it has nowhere to send") }
+            if s.transport == .wss || transport == .wss {
+                if transport != s.transport { errors.append("transport reads \(fields["transport"] ?? "nothing (old firmware)"), expected \(s.transport.rawValue)") }
+                let want = NodeSettings.canonicalCloudURL(s.cloudURL)
+                if !want.isEmpty && cloudURL != want { errors.append("cloud URL reads \(cloudURL ?? "nothing"), expected \(want)") }
+                if s.transport == .wss && cloudURL == nil { errors.append("no cloud URL on the node: transport wss has nowhere to go") }
+                if edge == nil { warnings.append("no TMWAccess IP kept on the node: a USB rollback to UDP will need one") }
+            } else {
+                if supportsDirectCloud && transport != .udp { errors.append("transport reads \(fields["transport"] ?? "nothing"), expected udp") }
+                if edge == nil { warnings.append("no TMWAccess IP on the node: it has nowhere to send") }
+            }
         case .lora:
             if !s.gateway.isEmpty && loraGateway != s.gateway { errors.append("TMLAccess IP reads \(loraGateway ?? "nothing"), expected \(s.gateway)") }
             if loraGateway == nil { warnings.append("no TMLAccess IP on the node") }
@@ -116,19 +132,48 @@ public final class NodeConsole {
     /// Reboots and waits for the Wi-Fi join line. Returns the node's IP, or
     /// nil if it did not join within `timeout` (wrong password, out of range).
     public func rebootAndWaitForWiFi(timeout: TimeInterval) throws -> String? {
+        try rebootAndWatch(wifiTimeout: timeout, cloudTimeout: 0).ip
+    }
+
+    public struct BootWatch: Equatable, Sendable {
+        /// Joined Wi-Fi as this address; nil if it did not.
+        public var ip: String?
+        /// TMedge acknowledged a report from this boot (transport wss only).
+        public var edgeAccepted = false
+        /// Why the cloud session last failed, as the node put it.
+        public var cloudError: String?
+    }
+
+    /// Reboots, waits for Wi-Fi, and -- if `cloudTimeout` > 0 -- for the node
+    /// to say TMedge accepted one of its reports. Two separate facts: a DHCP
+    /// lease proves nothing about the edge.
+    public func rebootAndWatch(wifiTimeout: TimeInterval, cloudTimeout: TimeInterval) throws -> BootWatch {
         log("› reboot")
         try port.write("reboot\n")
-        let deadline = Date().addingTimeInterval(timeout)
+        var w = BootWatch()
+        var deadline = Date().addingTimeInterval(wifiTimeout)
         while let line = try port.readLine(timeout: max(0, deadline.timeIntervalSinceNow)) {
             // "[wifi] connected ip=192.168.0.9 rssi=-60 dBm ch=6, ..."
-            if line.hasPrefix("[wifi] connected ip="), let ip = line.split(separator: "=").dropFirst().first?.split(separator: " ").first {
-                return String(ip)
+            if w.ip == nil, line.hasPrefix("[wifi] connected ip="), let ip = line.split(separator: "=").dropFirst().first?.split(separator: " ").first {
+                w.ip = String(ip)
+                log(line)
+                if cloudTimeout <= 0 { return w }
+                deadline = Date().addingTimeInterval(cloudTimeout)
+                continue
             }
-            if line.hasPrefix("[boot]") || line.hasPrefix("[wifi]") || line.hasPrefix("[lora]") || line.hasPrefix("[sensor]") {
+            if line.hasPrefix("[cloud] report accepted") {
+                log(line)
+                w.edgeAccepted = true
+                return w
+            }
+            // "[cloud] backoff: tls: certificate refused"
+            if line.hasPrefix("[cloud] backoff: ") { w.cloudError = String(line.dropFirst("[cloud] backoff: ".count)) }
+            if line.hasPrefix("[boot]") || line.hasPrefix("[wifi]") || line.hasPrefix("[lora]") || line.hasPrefix("[sensor]") ||
+                line.hasPrefix("[cloud]") {
                 log(line)
             }
         }
-        return nil
+        return w
     }
 
     public func reboot() throws {

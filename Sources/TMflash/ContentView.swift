@@ -95,9 +95,10 @@ struct DevicePanel: View {
             HStack {
                 Text(model.mode == .single ? "Device" : "Devices").font(.headline)
                 if model.mode == .batch {
-                    Text("\(model.batchPorts.count)/\(NodeSettings.maxBatch)").font(.caption.monospacedDigit())
+                    Text("\(model.orderedBatchPorts.count)/\(model.devices.count)").font(.caption.monospacedDigit())
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .help("Selected boards / detected USB boards")
                 }
                 Spacer()
                 Button { model.probes = [:]; model.refreshDevices() } label: { Image(systemName: "arrow.clockwise") }
@@ -121,9 +122,7 @@ struct DevicePanel: View {
                 }
                 if model.mode == .batch {
                     HStack {
-                        Button("Select all") {
-                            for d in model.devices.prefix(NodeSettings.maxBatch) { model.batchPorts.insert(d.path) }
-                        }
+                        Button("Select all", action: model.selectAllBatch)
                         Button("None") { model.batchPorts = [] }
                     }
                     .controlSize(.small)
@@ -208,6 +207,7 @@ struct SettingsForm: View {
     @EnvironmentObject var model: AppModel
     @State private var showPassword = false
     @State private var showKey = false
+    @State private var showEdgeToken = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -228,8 +228,9 @@ struct SettingsForm: View {
             }
 
             FormSection("Uplink") {
-                Field("Mode", hint: model.settings.mode == .wifi ? "Node → TMWAccess over the site's Wi-Fi"
-                                                                  : "Node → TMLAccess over LoRa") {
+                Field("Mode", hint: model.settings.mode == .lora ? "Node → TMLAccess over LoRa"
+                                    : model.settings.transport == .wss ? "Node → TMedge over the site's Wi-Fi and the internet"
+                                    : "Node → TMWAccess over the site's Wi-Fi") {
                     HStack(spacing: 10) {
                         Text("Wi-Fi").foregroundStyle(model.settings.mode == .wifi ? .primary : .secondary)
                         Toggle("", isOn: Binding(get: { model.settings.mode == .lora },
@@ -239,8 +240,8 @@ struct SettingsForm: View {
                     }
                 }
                 if model.settings.mode == .wifi {
-                    Field("Wi-Fi SSID", hint: "2.4 GHz network") {
-                        TextField("keep node's current", text: $model.settings.ssid).frame(width: 260)
+                    Field("Wi-Fi SSID") {
+                        WiFiSelection(ssid: $model.settings.ssid, discovery: model.wifi)
                     }
                     Field("Wi-Fi password") {
                         HStack {
@@ -251,8 +252,28 @@ struct SettingsForm: View {
                             RevealButton(on: $showPassword)
                         }
                     }
-                    Field("TMWAccess IP", hint: "The Wi-Fi gateway's LAN address") {
-                        TextField("e.g. 192.168.0.43", text: $model.settings.gateway).frame(width: 180)
+                    Field("Sends to", hint: model.settings.transport == .udp
+                          ? "A TMWAccess gateway on this site's network"
+                          : "TMedge in the cloud, over outbound HTTPS (443) — no gateway at the site") {
+                        Picker("", selection: $model.settings.transport) {
+                            Text("Local gateway").tag(UplinkTransport.udp)
+                            Text("Direct to cloud").tag(UplinkTransport.wss)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 260)
+                    }
+                    if model.settings.transport == .wss {
+                        Field("TMedge node URL", hint: "Its direct-node endpoint, wss://… /tmnode") {
+                            TextField("keep node's current", text: $model.settings.cloudURL).frame(width: 340)
+                        }
+                        Field("TMWAccess IP", hint: "Optional: kept on the node for a USB rollback to the local gateway") {
+                            TextField("keep node's current", text: $model.settings.gateway).frame(width: 180)
+                        }
+                        Notice(icon: "icloud", color: .blue,
+                               text: "Needs TMsense 1.4 or later: older firmware is refused before anything is written. After the reboot TMflash waits for TMedge to accept a report — joining Wi-Fi alone is not counted as success.")
+                    } else {
+                        Field("TMWAccess IP", hint: "The Wi-Fi gateway's LAN address") {
+                            TextField("e.g. 192.168.0.43", text: $model.settings.gateway).frame(width: 180)
+                        }
                     }
                 } else {
                     Field("TMLAccess IP", hint: "The LoRa gateway's address") {
@@ -278,6 +299,36 @@ struct SettingsForm: View {
                 }
             }
 
+            FormSection("TMedge server") {
+                Field("") {
+                    Toggle("Ask TMedge to admit each node after flashing", isOn: $model.registerWithEdge)
+                }
+                Field("Console URL", hint: "e.g. https://sense.hkumyseat.com") {
+                    TextField("https://…", text: $model.edgeURL)
+                        .frame(width: 260)
+                        .disabled(!model.registerWithEdge)
+                }
+                Field("Token", hint: "TMFLASH_TOKEN from the edge — kept in the Keychain, never logged") {
+                    HStack {
+                        Group {
+                            if showEdgeToken { TextField("", text: $model.edgeToken) }
+                            else { SecureField("", text: $model.edgeToken) }
+                        }.frame(width: 260)
+                        RevealButton(on: $showEdgeToken)
+                        Button("Test") { model.checkEdge() }
+                            .controlSize(.small)
+                            .disabled(model.edgeChecking)
+                    }.disabled(!model.registerWithEdge)
+                }
+                if let note = model.edgeCheck {
+                    Field("") { Text(note).font(.caption).foregroundStyle(.secondary) }
+                }
+                Field("") {
+                    Text("A node is admitted by somebody with the edge's debug console open. It joins with no floor, no position and no tables, so it cannot change any occupancy number until it is placed there.")
+                        .font(.caption).foregroundStyle(.secondary).frame(width: 330, alignment: .leading)
+                }
+            }
+
             FormSection("Firmware") {
                 Field("Source", hint: model.projectDir.map { abbreviate($0) } ?? "Not found") {
                     HStack {
@@ -298,7 +349,9 @@ struct SettingsForm: View {
     private var batchHint: String {
         let n = model.orderedBatchPorts.count
         switch model.plan {
-        case .success(let jobs): return "\(jobs.count) board\(jobs.count == 1 ? "" : "s") → IDs \(jobs.map { String($0.nodeID) }.joined(separator: ", "))"
+        case .success(let jobs):
+            guard let first = jobs.first, let last = jobs.last else { return "Tick boards on the left; IDs go in list order" }
+            return jobs.count == 1 ? "1 board → ID \(first.nodeID)" : "\(jobs.count) boards → IDs \(first.nodeID)–\(last.nodeID)"
         case .failure: return n == 0 ? "Tick boards on the left; IDs go in list order" : "\(n) board\(n == 1 ? "" : "s") ticked: the range must hold \(n) ID\(n == 1 ? "" : "s")"
         }
     }

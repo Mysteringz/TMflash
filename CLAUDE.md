@@ -35,8 +35,19 @@ scripts/build-app.sh [install]
   only to the node's serial port and the Keychain; the CLI takes them from env.
 - **The console protocol is TMsense's** (`src/tm_settings.cpp`): `show` field
   names (`uid`, `fw`, `node_id`, `mode`, `lora_gw`, `ssid`, `password`,
-  `edges`, `key`, `boot`) and the `<name> updated` / `saved` replies. Change
-  both sides together.
+  `edges`, `key`, then from 1.4 `transport`, `cloud_url`, `caps`, `uplink`,
+  `report_ack`, then `boot`) and the `<name> updated` / `saved` replies.
+  Change both sides together.
+- **Ask the firmware before using new commands.** `caps` containing `wss1`
+  means it knows `transport`/`cloud_url`; without it nothing about transport
+  is sent, and a request for direct cloud is refused before any write.
+- **Wi-Fi joined is not success for direct cloud.** Only the node's
+  "[cloud] report accepted by the edge" line (an ACK) is.
+- **Asking is not being admitted.** `EdgeClient` queues a join request with
+  TMedge; a person at the edge console allows it. Flashing is not finished
+  until the node is admitted, and the "TMedge accepts its reports" check is
+  skipped when it is not -- an edge that has never heard of a uid refuses its
+  first packet, which would otherwise be reported as a broken node.
 - **One image for every node** (`[env:tmflash]`, `TM_NO_NODE_CONFIG`); per-node
   values are provisioned, never compiled in.
 - The product binaries are `TMflash` and `tmflash-cli` — not `tmflash`, which
