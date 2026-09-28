@@ -5,17 +5,28 @@ struct WiFiSelection: View {
     @Binding var ssid: String
     @ObservedObject var discovery: WiFiDiscovery
     @State private var manualEntry = false
+    @State private var showHotspotHelp = false
+
+    private var usableNetworks: [WiFiNetwork] { discovery.networks.filter { $0.band.usableByTMsense } }
+    private var unavailableNetworks: [WiFiNetwork] { discovery.networks.filter { !$0.band.usableByTMsense } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Menu {
                     Button("Keep node’s current network") { ssid = ""; manualEntry = false }
-                    if !discovery.networks.isEmpty { Divider() }
-                    ForEach(discovery.networks) { network in
+                    if !usableNetworks.isEmpty { Divider() }
+                    ForEach(usableNetworks) { network in
                         Button("\(network.ssid)  (\(network.rssi) dBm)") {
                             ssid = network.ssid
                             manualEntry = false
+                        }
+                    }
+                    if !unavailableNetworks.isEmpty {
+                        Divider()
+                        ForEach(unavailableNetworks) { network in
+                            Button("\(network.ssid)  (\(network.band.label) — needs 2.4 GHz)") { }
+                                .disabled(true)
                         }
                     }
                     Divider()
@@ -36,6 +47,13 @@ struct WiFiSelection: View {
             } else {
                 Button("Enter SSID manually…") { manualEntry = true }
                     .buttonStyle(.link).font(.caption)
+            }
+            Button("Phone hotspot not listed?") { showHotspotHelp.toggle() }
+                .buttonStyle(.link).font(.caption)
+            if showHotspotHelp {
+                Text("On iPhone: enable Allow Others to Join and Maximize Compatibility (if available). Keep Personal Hotspot settings open, then Rescan. On other phones, set the hotspot band to 2.4 GHz.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(alignment: .top, spacing: 6) {
                 if discovery.isBusy { ProgressView().controlSize(.small) }

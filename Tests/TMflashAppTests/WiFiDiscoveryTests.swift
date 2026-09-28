@@ -47,8 +47,18 @@ final class WiFiDiscoveryTests: XCTestCase {
         discovery.updateAuthorization(.authorizedAlways)
         try await finishScan(discovery)
         XCTAssertEqual(discovery.state, .ready)
-        XCTAssertTrue(discovery.message.contains("No usable 2.4 GHz networks"))
-        XCTAssertTrue(discovery.message.contains("manually"))
+        XCTAssertTrue(discovery.message.contains("No Wi-Fi networks found"))
+        XCTAssertTrue(discovery.message.contains("phone hotspot"))
+    }
+
+    @MainActor
+    func testHigherBandHotspotIsReportedAsVisibleButUnavailable() async throws {
+        let discovery = WiFiDiscovery(live: false) { [WiFiNetwork(ssid: "Phone Hotspot", rssi: -40, band: .fiveGHz)] }
+        discovery.updateAuthorization(.authorizedAlways)
+        try await finishScan(discovery)
+        XCTAssertEqual(discovery.networks.first?.ssid, "Phone Hotspot")
+        XCTAssertFalse(discovery.networks[0].band.usableByTMsense)
+        XCTAssertTrue(discovery.message.contains("No usable 2.4 GHz"))
     }
 
     @MainActor

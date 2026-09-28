@@ -83,8 +83,17 @@ installed yet. Run the built **TMflash.app** and allow its Location Services
 prompt: macOS requires this permission to reveal network names. TMflash does
 not request location updates. If permission was denied, enable TMflash under
 **System Settings → Privacy & Security → Location Services**, then **Rescan**.
-The picker shows each SSID once, strongest signal first, and excludes networks
-seen only on 5 or 6 GHz. It does not join a network or change the Mac's Wi-Fi.
+The picker shows each SSID once and prefers 2.4 GHz when a name is broadcast
+on several bands. Networks seen only on 5 or 6 GHz remain visible but cannot
+be selected because TMsense's ESP32-S3 uses 2.4 GHz. It does not join a network
+or change the Mac's Wi-Fi.
+
+For a **phone hotspot**, turn on sharing and set its Wi-Fi band to **2.4 GHz**,
+then press **Rescan**. On a supported iPhone, open **Settings → Personal Hotspot**,
+enable **Allow Others to Join** and **Maximize Compatibility**, and leave that
+settings screen open until the node connects. TMflash's **Phone hotspot not listed?**
+link shows these steps in the app. A hotspot visible on 5 GHz alone must switch
+bands before a TMsense can join it.
 
 Use **Enter SSID manually…** for a hidden network, a site outside the Mac's
 range, or when scanning is unavailable. **Keep node’s current network** leaves
@@ -214,7 +223,7 @@ To check the UI without hardware:
 
 ```sh
 swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch --dark
-# scenes: single, batch, batch-large, lora, cloud, cloud-done, running, done, empty, wifi-scanning, wifi-empty, wifi-denied
+# scenes: single, batch, batch-large, lora, cloud, cloud-done, running, done, empty, hotspot, wifi-scanning, wifi-empty, wifi-denied
 ```
 
 ## Continuous integration

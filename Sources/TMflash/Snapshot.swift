@@ -46,6 +46,10 @@ enum Snapshot {
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
         m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
         m.wifi.state = .ready
+        if scene == "hotspot" {
+            m.settings.ssid = ""
+            m.wifi.networks = [WiFiNetwork(ssid: "Phone Hotspot", rssi: -45, band: .fiveGHz)]
+        }
         if scene == "wifi-scanning" { m.wifi.networks = []; m.wifi.state = .scanning }
         if scene == "wifi-empty" { m.wifi.networks = [] }
         if scene == "wifi-denied" { m.wifi.updateAuthorization(.denied) }
