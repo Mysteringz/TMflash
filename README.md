@@ -2,7 +2,7 @@
 
 A Mac app for flashing **TMsense** thermal nodes (Heltec WiFi LoRa 32 V3 with
 an MLX90640) and setting them up in one click, in the style of Raspberry Pi
-Imager. Plug in a board, type its node ID and network details, and press
+Imager. Plug in a board, enter its node ID, scan and select its Wi-Fi network, and press
 **Flash**. TMflash then:
 
 1. **builds** the TMsense firmware from source with PlatformIO (`pio run -e
@@ -13,12 +13,12 @@ Imager. Plug in a board, type its node ID and network details, and press
 4. **checks** it: reads the settings back and verifies them, then restarts
    the node and waits until it joins the Wi-Fi.
 
-**Batch mode** does the same for up to 10 boards at once, in parallel. You
+**Batch mode** does the same for all selected boards at once, in parallel. You
 give a starting and an ending node ID, and the boards get consecutive IDs in
 the order they're listed.
 
 ```
-┌ TMflash ─────────────────────────────────────── [Single node | Batch (up to 10)] ┐
+┌ TMflash ────────────────────────────────────────────── [Single node | Batch] ────┐
 │ Device                │ NODE IDENTITY   Node ID [ 3 ]                             │
 │ (•) usbserial-0001    │ UPLINK          Mode  Wi-Fi (  ) LoRa                     │
 │     Silicon Labs CP210x│                 SSID [ExampleWiFi]  Password [••••]       │
@@ -68,21 +68,42 @@ also installed, the same board appears a second time as
    serial port restarts an ESP32, so identifying a board restarts it.
 2. Enter the **Node ID** (1–65535). Write the same number on the enclosure.
 3. Choose **Wi-Fi** or **LoRa**:
-   - Wi-Fi: the SSID (2.4 GHz), the password, and the **TMWAccess IP**.
-     That's the Wi-Fi gateway's LAN address; replace the example
-     `192.0.2.10` with the address assigned at your site.
+   - Wi-Fi: press **Scan**, choose a nearby **2.4 GHz** SSID from the menu,
+     then enter the password. For **Local gateway**, enter the **TMWAccess IP**:
+     the gateway's LAN address, replacing the example `192.0.2.10` with your
+     site's address. For **Direct to cloud**, enter the **TMedge node URL**.
    - LoRa: the **TMLAccess IP**. *The firmware has no LoRa uplink yet.* A
      node in LoRa mode stores the setting and says so on its console, but it
      sends nothing until LoRa support ships. TMflash warns about this.
 4. Enter the **signing key**: TMedge's `TM_KEY`, the same on every node.
 5. Press **Flash**.
 
-**Batch (up to 10)**
+Scanning uses this Mac's Wi-Fi adapter, so the board does not need firmware
+installed yet. Run the built **TMflash.app** and allow its Location Services
+prompt: macOS requires this permission to reveal network names. TMflash does
+not request location updates. If permission was denied, enable TMflash under
+**System Settings → Privacy & Security → Location Services**, then **Rescan**.
+The picker shows each SSID once, strongest signal first, and excludes networks
+seen only on 5 or 6 GHz. It does not join a network or change the Mac's Wi-Fi.
+
+Use **Enter SSID manually…** for a hidden network, a site outside the Mac's
+range, or when scanning is unavailable. **Keep node’s current network** leaves
+the saved SSID untouched. A rescan never changes your selection. The selected
+SSID and entered password are provisioned over USB after flashing; in batch
+mode they apply to every selected board.
+
+**Batch**
 
 Tick the boards, then enter **Node IDs from … to …**. The range must hold
 exactly as many IDs as there are ticked boards. Each board shows its ID badge
 before you start. They're flashed and checked in parallel, and a failure on
 one board never stops the others.
+
+The available batch size follows the USB boards detected by the Mac, including
+boards connected through hubs. **Select all** selects every detected board,
+and the device counter shows selected / detected boards. There is no fixed
+10-board cap; the host's USB connections and resources determine how many
+boards can be used. Node IDs must still be distinct and within 1–65535.
 
 **Results**
 
@@ -174,7 +195,7 @@ These tests check claims about behaviour. The pipeline tests run the real
 serial code against **fake TMsense nodes on pseudo-terminals**, which speak
 the firmware's console. They cover:
 
-- ten boards at once, each getting its own ID;
+- sixteen boards at once, each getting its own ID;
 - one bad board not stopping the others;
 - a silent board failing instead of hanging;
 - secrets never reaching the log;
@@ -186,12 +207,14 @@ Other tests cover:
 - esptool progress and metadata parsing;
 - that TMflash never erases flash;
 - collapsing a board that appears under two drivers.
+- Wi-Fi band filtering, duplicate SSIDs, exact SSID bytes, permission and scan
+  failures, and provisioning a scanned SSID through a fake node.
 
 To check the UI without hardware:
 
 ```sh
 swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch --dark
-# scenes: single, batch, lora, running, done, empty
+# scenes: single, batch, batch-large, lora, cloud, cloud-done, running, done, empty, wifi-scanning, wifi-empty, wifi-denied
 ```
 
 ## Continuous integration

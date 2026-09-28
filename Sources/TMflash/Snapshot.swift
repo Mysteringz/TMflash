@@ -37,23 +37,33 @@ enum Snapshot {
     }
 
     static func populate(_ m: AppModel, scene: String) {
-        let boards = (1...4).map {
+        let boards = (1...(scene == "batch-large" ? 16 : 4)).map {
             SerialDevice(path: "/dev/cu.usbserial-000\(String($0))", vendorID: 0x10C4, productID: 0xEA60, product: "CP2102 USB to UART Bridge Controller",
                          serialNumber: "000\(String($0))", locationID: $0)
         }
         m.projectDir = NSHomeDirectory() + "/Desktop/IOT/TMsense"
         m.firmwareVersion = "tmsense-1.1"
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
+        m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
+        m.wifi.state = .ready
+        if scene == "wifi-scanning" { m.wifi.networks = []; m.wifi.state = .scanning }
+        if scene == "wifi-empty" { m.wifi.networks = [] }
+        if scene == "wifi-denied" { m.wifi.updateAuthorization(.denied) }
         let info = NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.1", "node_id": "3", "mode": "wifi"])
         switch scene {
         case "empty":
             m.devices = []
-        case "batch":
+        case "batch", "batch-large":
             m.mode = .batch
             m.devices = boards
             m.batchPorts = Set(boards.prefix(3).map(\.path))
             m.startIDText = "11"; m.endIDText = "13"
             m.probes = [boards[0].path: .tmsense(info), boards[1].path: .noAnswer, boards[2].path: .noAnswer, boards[3].path: .checking]
+            if scene == "batch-large" {
+                m.selectAllBatch()
+                m.endIDText = "26"
+                m.probes = Dictionary(uniqueKeysWithValues: boards.map { ($0.path, .noAnswer) })
+            }
         case "lora":
             m.devices = [boards[0]]
             m.selectedPort = boards[0].path

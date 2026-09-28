@@ -6,8 +6,13 @@ import TMflashCore
 @MainActor
 final class AppModel: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
-        case single = "Single node", batch = "Batch (up to 10)"
+        case single = "Single node", batch = "Batch"
         var id: String { rawValue }
+
+        init(persistedValue: String?) {
+            // The old display title was also the stored preference.
+            self = persistedValue == "Batch (up to 10)" ? .batch : Self(rawValue: persistedValue ?? "") ?? .single
+        }
     }
 
     enum ProbeState: Equatable {
@@ -52,6 +57,7 @@ final class AppModel: ObservableObject {
     @Published var firmwareVersion: String?
 
     let toolchain: Toolchain?
+    let wifi: WiFiDiscovery
     private let defaults: UserDefaults
     private var runTask: Task<Void, Never>?
     private var pollTimer: Timer?
@@ -62,9 +68,10 @@ final class AppModel: ObservableObject {
     init(live: Bool = true, defaults: UserDefaults = .standard) {
         self.live = live
         self.defaults = defaults
+        wifi = WiFiDiscovery(live: live)
         toolchain = Toolchain.locate()
         guard live else { return }
-        mode = Mode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .single
+        mode = Mode(persistedValue: defaults.string(forKey: "mode"))
         nodeIDText = defaults.string(forKey: "nodeID") ?? ""
         startIDText = defaults.string(forKey: "startID") ?? ""
         endIDText = defaults.string(forKey: "endID") ?? ""
@@ -177,7 +184,11 @@ final class AppModel: ObservableObject {
 
     func toggleBatch(_ path: String) {
         if batchPorts.contains(path) { batchPorts.remove(path) }
-        else if batchPorts.count < NodeSettings.maxBatch { batchPorts.insert(path) }
+        else if devices.contains(where: { $0.path == path }) { batchPorts.insert(path) }
+    }
+
+    func selectAllBatch() {
+        batchPorts = Set(devices.map(\.path))
     }
 
     /// The jobs to run, or why there are none yet.
