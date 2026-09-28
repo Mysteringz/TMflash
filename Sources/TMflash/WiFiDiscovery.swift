@@ -32,13 +32,16 @@ final class WiFiDiscovery: NSObject, ObservableObject, CLLocationManagerDelegate
 
     var message: String {
         switch state {
-        case .idle: return "Scan nearby 2.4 GHz networks using this Mac."
+        case .idle: return "Scan nearby Wi-Fi networks using this Mac."
         case .requestingPermission: return "Allow Location Services in the macOS prompt to see network names."
-        case .scanning: return "Scanning for 2.4 GHz networks…"
+        case .scanning: return "Scanning for Wi-Fi networks…"
         case .ready:
-            return networks.isEmpty
-                ? "No usable 2.4 GHz networks found. Scan again or enter a hidden network manually."
-                : "\(networks.count) nearby 2.4 GHz network\(networks.count == 1 ? "" : "s"), strongest first."
+            let usable = networks.filter { $0.band.usableByTMsense }.count
+            let unavailable = networks.count - usable
+            if usable == 0 && unavailable == 0 { return "No Wi-Fi networks found. For a phone hotspot, check its 2.4 GHz setting, rescan, or enter an SSID manually." }
+            if usable == 0 { return "No usable 2.4 GHz networks; \(unavailable) other network\(unavailable == 1 ? " is" : "s are") shown but unavailable to TMsense." }
+            if unavailable > 0 { return "\(usable) usable 2.4 GHz network\(usable == 1 ? "" : "s"); \(unavailable) other network\(unavailable == 1 ? "" : "s") shown but unavailable." }
+            return "\(usable) nearby 2.4 GHz network\(usable == 1 ? "" : "s"), strongest first."
         case .failed(let reason): return reason
         }
     }

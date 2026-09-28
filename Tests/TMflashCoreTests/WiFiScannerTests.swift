@@ -6,13 +6,36 @@ final class WiFiScannerTests: XCTestCase {
         WiFiAccessPoint(ssid: Data(ssid.utf8), rssi: rssi, is2GHz: is2GHz)
     }
 
-    func testOnly24GHzIsOfferedEvenWhenIts5GHzSiblingIsStronger() {
+    func test24GHzIsPreferredAndHigherBandNetworksRemainVisibleAsUnavailable() {
         let choices = WiFiScanner.choices(from: [
             ap("Dual band", -20, is2GHz: false), ap("Dual band", -70),
             ap("5 GHz only", -30, is2GHz: false), ap("Nearby", -40),
         ])
-        XCTAssertEqual(choices.map(\.ssid), ["Nearby", "Dual band"])
-        XCTAssertEqual(choices.map(\.rssi), [-40, -70])
+        XCTAssertEqual(choices.map(\.ssid), ["Nearby", "Dual band", "5 GHz only"])
+        XCTAssertEqual(choices.map(\.rssi), [-40, -70, -30])
+        XCTAssertEqual(choices.map(\.band), [.twoGHz, .twoGHz, .fiveGHz])
+        XCTAssertFalse(choices[2].band.usableByTMsense)
+    }
+
+    func testPhoneHotspotAppearsButCanOnlyBeChosenAfterSwitchingTo24GHz() {
+        let hotspot = Data("Phone Hotspot".utf8)
+        let fiveGHz = WiFiScanner.choices(from: [WiFiAccessPoint(ssid: hotspot, rssi: -42, band: .fiveGHz)])
+        XCTAssertEqual(fiveGHz.map(\.ssid), ["Phone Hotspot"])
+        XCTAssertFalse(fiveGHz[0].band.usableByTMsense)
+        let compatible = WiFiScanner.choices(from: [WiFiAccessPoint(ssid: hotspot, rssi: -55, band: .twoGHz)])
+        XCTAssertEqual(compatible.map(\.ssid), ["Phone Hotspot"])
+        XCTAssertTrue(compatible[0].band.usableByTMsense)
+        XCTAssertEqual(ConsoleCommand.provisioning(id: 7, settings: NodeSettings(ssid: compatible[0].ssid))
+            .first { $0.expect == "ssid updated" }?.line, "set ssid Phone Hotspot")
+    }
+
+    func testSixGHzAndUnknownBandAppearButAreNotSelectable() {
+        let choices = WiFiScanner.choices(from: [
+            WiFiAccessPoint(ssid: Data("Six".utf8), rssi: -40, band: .sixGHz),
+            WiFiAccessPoint(ssid: Data("Unknown".utf8), rssi: -50, band: .unknown),
+        ])
+        XCTAssertEqual(choices.map(\.ssid), ["Six", "Unknown"])
+        XCTAssertTrue(choices.allSatisfy { !$0.band.usableByTMsense })
     }
 
     func testDuplicateAccessPointsAppearOnceStrongestFirstWithStableTies() {
