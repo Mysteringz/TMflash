@@ -207,6 +207,7 @@ struct SettingsForm: View {
     @EnvironmentObject var model: AppModel
     @State private var showPassword = false
     @State private var showKey = false
+    @State private var showEdgeToken = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -295,6 +296,36 @@ struct SettingsForm: View {
                 }
                 Field("") {
                     Toggle("Remember password and key in the Keychain", isOn: $model.rememberSecrets)
+                }
+            }
+
+            FormSection("TMedge server") {
+                Field("") {
+                    Toggle("Ask TMedge to admit each node after flashing", isOn: $model.registerWithEdge)
+                }
+                Field("Console URL", hint: "e.g. https://sense.hkumyseat.com") {
+                    TextField("https://…", text: $model.edgeURL)
+                        .frame(width: 260)
+                        .disabled(!model.registerWithEdge)
+                }
+                Field("Token", hint: "TMFLASH_TOKEN from the edge — kept in the Keychain, never logged") {
+                    HStack {
+                        Group {
+                            if showEdgeToken { TextField("", text: $model.edgeToken) }
+                            else { SecureField("", text: $model.edgeToken) }
+                        }.frame(width: 260)
+                        RevealButton(on: $showEdgeToken)
+                        Button("Test") { model.checkEdge() }
+                            .controlSize(.small)
+                            .disabled(model.edgeChecking)
+                    }.disabled(!model.registerWithEdge)
+                }
+                if let note = model.edgeCheck {
+                    Field("") { Text(note).font(.caption).foregroundStyle(.secondary) }
+                }
+                Field("") {
+                    Text("A node is admitted by somebody with the edge's debug console open. It joins with no floor, no position and no tables, so it cannot change any occupancy number until it is placed there.")
+                        .font(.caption).foregroundStyle(.secondary).frame(width: 330, alignment: .leading)
                 }
             }
 

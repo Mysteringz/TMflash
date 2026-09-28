@@ -109,6 +109,12 @@ final class MacBox: @unchecked Sendable {
     let settings = settingsFromArgs()
     let w = await writer()
     var options = PipelineOptions()
+    // Like every other secret here, from the environment rather than argv:
+    // a command line is visible to every process on the machine.
+    if let url = ProcessInfo.processInfo.environment["TMEDGE_URL"],
+       let token = ProcessInfo.processInfo.environment["TMFLASH_TOKEN"], !url.isEmpty, !token.isEmpty {
+        options.server = EdgeServer(url: url, token: token)
+    }
     if flags.contains("--no-wifi-check") { options.wifiTimeout = 0 }
     if flags.contains("--no-edge-check") { options.edgeTimeout = 0 }
     let lastPct = PctBox()
