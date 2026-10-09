@@ -23,6 +23,7 @@ public struct DeviceJob: Hashable, Sendable {
 
 public enum JobStage: Equatable, Sendable {
     case queued
+    case checkingAdoption
     case flashing(Double)
     case connecting
     case provisioning
@@ -35,6 +36,7 @@ public enum JobStage: Equatable, Sendable {
     public var label: String {
         switch self {
         case .queued: return "Waiting"
+        case .checkingAdoption: return "Verifying your console sign-in"
         case .flashing(let p): return "Writing firmware \(Int(p * 100))%"
         case .connecting: return "Waiting for the node to boot"
         case .provisioning: return "Writing settings"
@@ -130,7 +132,12 @@ public enum Pipeline {
         let log: @Sendable (String) -> Void = { events(.log(port: port, $0)) }
         var result = JobResult(job: job)
         do {
-            if let server = options.server, let problem = server.problems().first { throw SerialError(problem) }
+            if let server = options.server {
+                events(.stage(port: port, .checkingAdoption))
+                try await EdgeClient.preflight(server)
+                log("Console access verified; persistent node registration is ready")
+            }
+            try Task.checkCancellation()
             if let writer {
                 events(.stage(port: port, .flashing(0)))
                 result.uid = try await writer.write(port: port, log: log) { events(.stage(port: port, .flashing($0))) }

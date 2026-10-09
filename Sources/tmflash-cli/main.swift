@@ -20,6 +20,7 @@ options:
   --transport udp|wss   wifi only: local gateway (udp, default) or straight to TMedge (wss; TMsense 1.4+)
   --cloud-url URL       TMedge's node endpoint for wss, e.g. wss://sense.example.com/tmnode
   --no-flash            only write settings (firmware already on the board)
+  --adopt               use the algo account signed in through TMflash.app
   --no-wifi-check       don't reboot and wait for the node to join Wi-Fi
   --no-edge-check       wss: don't wait for TMedge to accept a report after joining
   --project DIR         TMsense folder (default: $TMSENSE_DIR or ../TMsense)
@@ -44,7 +45,7 @@ var flags = Set<String>()
 while let a = args.first {
     args.removeFirst()
     guard a.hasPrefix("--") else { fail("unexpected argument \(a)") }
-    if ["--probe", "--no-flash", "--no-wifi-check", "--no-edge-check", "--help"].contains(a) { flags.insert(a); continue }
+    if ["--probe", "--no-flash", "--no-wifi-check", "--no-edge-check", "--adopt", "--help"].contains(a) { flags.insert(a); continue }
     guard let v = args.first else { fail("\(a) needs a value") }
     args.removeFirst()
     opts[a] = v
@@ -117,7 +118,14 @@ final class MacBox: @unchecked Sendable {
     // Like every other secret here, from the environment rather than argv:
     // a command line is visible to every process on the machine.
     let env = ProcessInfo.processInfo.environment
-    if env["TMEDGE_URL"] != nil || env["TMFLASH_TOKEN"] != nil {
+    if flags.contains("--adopt") {
+        guard let stored = SecretStore.get("flasher-session-v1")?.data(using: .utf8),
+              let session = try? JSONDecoder().decode(FlasherSession.self, from: stored),
+              AccountClient.matches(session, url: env["TMEDGE_URL"] ?? session.url) else {
+            fail("Sign in with your algo account in TMflash.app before using --adopt")
+        }
+        options.server = session.server
+    } else if env["TMEDGE_URL"] != nil || env["TMFLASH_TOKEN"] != nil {
         let server = EdgeServer(url: env["TMEDGE_URL"] ?? "", token: env["TMFLASH_TOKEN"] ?? "")
         if let problem = server.problems().first { fail(problem) }
         options.server = server

@@ -17,11 +17,11 @@ final class ProvisioningSettingsTests: XCTestCase {
         model.registerWithEdge = true
         XCTAssertFalse(model.blockers.isEmpty)
         model.edgeURL = "https://console.example.com"
-        XCTAssertTrue(model.blockers.contains { $0.contains("token") })
-        model.edgeToken = String(repeating: "t", count: 32)
+        XCTAssertTrue(model.blockers.contains { $0.contains("Sign in") })
+        model.edgeSession = FlasherSession(id: "test", token: String(repeating: "t", count: 32), user: "bench", expiresAt: Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000), url: model.edgeURL)
         XCTAssertTrue(model.blockers.isEmpty)
         model.edgeCheck = "Connected. The token is accepted."
-        model.edgeToken = String(repeating: "u", count: 32)
+        model.edgeSession = nil
         XCTAssertNil(model.edgeCheck, "a test of the previous credential says nothing about the new one")
         model.edgeCheck = "Connected. The token is accepted."
         model.edgeURL = "https://another.example.com"

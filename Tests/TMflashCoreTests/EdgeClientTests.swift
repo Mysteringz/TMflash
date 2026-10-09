@@ -14,18 +14,22 @@ final class StubEdge: URLProtocol {
     struct Reply: Sendable { var code: Int; var body: String; var contentType = "application/json" }
     nonisolated(unsafe) static var requestReply = Reply(code: 202, body: #"{"status":"pending","id":"1","uid":"$uid"}"#)
     nonisolated(unsafe) static var statusReply: Reply?
+    nonisolated(unsafe) static var accountReply: Reply?
     nonisolated(unsafe) static var statuses: [String] = []
     nonisolated(unsafe) static var seenAuth: [String] = []
     nonisolated(unsafe) static var seenBodies: [String] = []
     nonisolated(unsafe) static var seenURLs: [URL] = []
+    nonisolated(unsafe) static var preflightReply = Reply(code: 200, body: #"{"protocol":"tmflash.adoption.v1","ready":true,"approval":"human"}"#)
 
     static func reset() {
         requestReply = Reply(code: 202, body: #"{"status":"pending","id":"1","uid":"$uid"}"#)
         statusReply = nil
+        accountReply = nil
         statuses = []
         seenAuth = []
         seenBodies = []
         seenURLs = []
+        preflightReply = Reply(code: 200, body: #"{"protocol":"tmflash.adoption.v1","ready":true,"approval":"human"}"#)
     }
 
     static var session: URLSession {
@@ -57,7 +61,7 @@ final class StubEdge: URLProtocol {
         let requestUID = StubEdge.seenBodies.last.flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["uid"] ?? ""
         let uid = path.hasSuffix("/request") ? requestUID : request.url?.lastPathComponent ?? ""
-        let reply: StubEdge.Reply = path.hasSuffix("/request")
+        let reply: StubEdge.Reply = path.hasSuffix("/exchange") ? StubEdge.accountReply ?? Reply(code: 401, body: "{}") : path.hasSuffix("/preflight") ? StubEdge.preflightReply : path.hasSuffix("/request")
             ? StubEdge.requestReply
             : StubEdge.statusReply ?? Reply(code: 200, body: #"{"uid":"$uid","status":"\#(StubEdge.statuses.isEmpty ? "unknown" : StubEdge.statuses.removeFirst())"}"#)
 
@@ -134,22 +138,22 @@ final class EdgeClientTests: XCTestCase {
             _ = try await EdgeClient.requestJoin(StubEdge.server, uid: "30:ed:a0:00:00:05", label: "x", firmware: nil)
             XCTFail("expected a refusal")
         } catch let e as EdgeError {
-            XCTAssertTrue(e.description.contains("token"), e.description)
+            XCTAssertTrue(e.description.contains("credential"), e.description)
         }
-        StubEdge.statusReply = .init(code: 401, body: #"{"error":"refused"}"#)
+        StubEdge.preflightReply = .init(code: 401, body: #"{"error":"refused"}"#)
         let note = await EdgeClient.check(StubEdge.server)
-        XCTAssertEqual(note, "Reached the server, but it refused the token.")
+        XCTAssertTrue(note.contains("refused the sign-in credential"))
     }
 
     func testASignInPageOrMalformedJSONNeverVerifiesAToken() async {
         for reply in [StubEdge.Reply(code: 200, body: "<html>Sign in</html>", contentType: "text/html"),
                       .init(code: 200, body: "{}"), .init(code: 200, body: "not JSON"),
                       .init(code: 200, body: #"{"uid":"wrong","status":"registered"}"#)] {
-            StubEdge.statusReply = reply
+            StubEdge.preflightReply = reply
             let note = await EdgeClient.check(StubEdge.server)
-            XCTAssertFalse(note.contains("token is accepted"))
+            XCTAssertFalse(note.contains("Adoption is ready"))
         }
-        StubEdge.statusReply = .init(code: 302, body: "")
+        StubEdge.preflightReply = .init(code: 302, body: "")
         let note = await EdgeClient.check(StubEdge.server)
         XCTAssertTrue(note.contains("redirected"))
     }
@@ -169,15 +173,45 @@ final class EdgeClientTests: XCTestCase {
         StubEdge.requestReply = .init(code: 401, body: "{}")
         let state = await EdgeClient.join(StubEdge.server, uid: "30:ed:a0:00:00:06", label: "Node 6", firmware: nil, timeout: 1)
         guard case .failed(let reason) = state else { return XCTFail("expected a verification failure, got \(state)") }
-        XCTAssertTrue(reason.contains("token"))
+        XCTAssertTrue(reason.contains("credential"))
         let node = try FakeNode(uid: "30:ed:a0:00:00:07")
         node.start()
         defer { node.stop() }
         let result = await Pipeline.run(jobs: [DeviceJob(port: node.path, nodeID: 7)], settings: NodeSettings(), writer: nil,
                                         options: .init(bootTimeout: 5, wifiTimeout: 0, server: StubEdge.server, approvalTimeout: 1)) { _ in }
         XCTAssertFalse(result[0].ok)
-        XCTAssertTrue(result[0].error?.contains("refused the provisioning token") == true)
+        XCTAssertTrue(result[0].error?.contains("refused the sign-in credential") == true)
         XCTAssertFalse(node.commands.contains("reboot"), "a refused admission is not reported as a waiting success")
+    }
+
+    func testInvalidPreflightNeverTouchesUSBOrInvokesTheFirmwareWriter() async throws {
+        for reply in [StubEdge.Reply(code: 401, body: "{}"), .init(code: 403, body: "denied"), .init(code: 503, body: "{}"),
+                      .init(code: 302, body: ""), .init(code: 200, body: "<html>Sign in</html>", contentType: "text/html"),
+                      .init(code: 200, body: #"{"protocol":"tmflash.adoption.v1","ready":false,"approval":"human"}"#),
+                      .init(code: 200, body: #"{"protocol":"tmflash.adoption.v1","ready":1,"approval":"human"}"#)] {
+            StubEdge.reset()
+            StubEdge.preflightReply = reply
+            let node = try FakeNode(uid: "30:ed:a0:00:00:0a")
+            node.start()
+            let writer = AdoptionWriter()
+            let result = await Pipeline.run(jobs: [.init(port: node.path, nodeID: 10)], settings: NodeSettings(), writer: writer,
+                                            options: .init(server: StubEdge.server)) { _ in }
+            node.stop()
+            XCTAssertFalse(result[0].ok)
+            let writes = await writer.calls()
+            XCTAssertEqual(writes, 0, "failed access must be detected before flashing")
+            XCTAssertTrue(node.commands.isEmpty, "no serial configuration command may precede preflight")
+            XCTAssertEqual(StubEdge.seenURLs.count, 1)
+            XCTAssertEqual(StubEdge.seenURLs.first?.path, "/api/provision/preflight")
+        }
+    }
+
+    func testThePendingRequestShowsAMatchingCodeWithoutLoggingCredentials() async throws {
+        StubEdge.requestReply = .init(code: 202, body: #"{"status":"pending","id":"1","uid":"$uid","pairingCode":"ABCDEF12"}"#)
+        let log = LogBox()
+        _ = try await EdgeClient.requestJoin(StubEdge.server, uid: "30:ed:a0:00:00:0b", label: "Node 11", firmware: nil) { log.add($0) }
+        XCTAssertTrue(log.all.joined().contains("ABCDEF12"))
+        XCTAssertFalse(log.all.joined().contains(StubEdge.server.token))
     }
 
     func testUnexpectedStatusesAndServerErrorsCannotMasqueradeAsAdmission() async throws {
@@ -189,4 +223,13 @@ final class EdgeClientTests: XCTestCase {
         _ = await EdgeClient.join(StubEdge.server, uid: "30:ed:a0:00:00:09", label: "Node 9", firmware: nil, timeout: 1) { log.add($0) }
         XCTAssertFalse(log.all.joined().contains(StubEdge.server.token), "server error bodies must not echo credentials into logs")
     }
+}
+
+private actor AdoptionWriter: FirmwareWriter {
+    private var count = 0
+    func write(port: String, log: @escaping @Sendable (String) -> Void, progress: @escaping @Sendable (Double) -> Void) async throws -> String? {
+        count += 1
+        return nil
+    }
+    func calls() -> Int { count }
 }

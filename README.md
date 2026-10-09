@@ -109,25 +109,31 @@ mode they apply to every selected board.
 
 **TMedge admission**
 
-Enable **Ask TMedge to admit each node after flashing** when commissioning a
-new board. Use
-the admin console URL (`https://console.hkumyseat.com`) and its `TMFLASH_TOKEN`.
-The token needs at least 24 printable ASCII characters, without spaces,
-commas or line breaks. It is separate from the sensor's signing key and the
-console admin password. TMflash keeps it in Keychain when remembering secrets.
+Enable **Adopt each node after flashing** for a new board. Set the console URL
+to `https://algo.hkumyseat.com`, then click **Sign in with algo account**.
+Complete the existing browser sign-in and authorize TMflash. No service token
+or copied provisioning token is needed. Your password stays in the browser;
+an expiring 24-hour session stays in the Mac's Keychain.
 
-**Test** checks an authenticated JSON provisioning response. A sign-in page,
-redirect, wrong token or malformed response cannot count as verification.
-Use HTTPS; HTTP is allowed only on loopback for local tests or an SSH tunnel.
-The console's sign-in proxy must permit the token-authenticated provisioning
-request and status endpoints to reach TMedge.
+**Test** checks account access and persistent registration storage. This same
+check must pass before any USB write or firmware flashing. A sign-in page,
+redirect, refusal or malformed response fails the job. HTTPS is required
+except for loopback fixtures or SSH tunnels.
 
-The token can queue a request and read its status. An administrator still
-approves the node in the console; approval registers it without assigning a
-seat or zone. A refused token or unverifiable response fails the job. Only
-a confirmed pending request can produce the waiting-for-approval warning.
-See [the token pipeline audit](docs/TOKEN_PIPELINE.md) for verification results
-and the current live configuration finding.
+After flashing, compare the device UID and request code shown in TMflash with
+the **Adoption** tab in the algo console. Type both to approve that physical
+device. It remains unplaced until an operator installs it in the floor plan.
+For direct cloud, success also requires a fresh report ACK from the rebooted
+board. Wi-Fi connection or approval alone cannot pass verification.
+
+Sign out in TMflash or revoke its session in Adoption to end access. Account
+removal and password changes invalidate it immediately. The CLI's `--adopt`
+uses the account session from TMflash.app's Keychain; it asks macOS for access
+when needed. Legacy `TMFLASH_TOKEN` CLI configuration remains supported for
+existing integrations, but is not required for the app.
+
+See [the verification pipeline](docs/TOKEN_PIPELINE.md) for deployment
+requirements and the remaining public verification step.
 
 **Batch**
 

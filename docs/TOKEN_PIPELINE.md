@@ -1,85 +1,83 @@
 # TMflash → TMsense → TMedge verification
 
-Checked 2026-10-09. Local fixes have not been deployed to the live edge.
+## Account sign-in
 
-## The credentials and approval boundary
+TMflash opens `https://algo.hkumyseat.com/tmflash/connect` using macOS
+ASWebAuthenticationSession. Cloudflare's browser check and the existing algo
+account/Turnstile verification run there. Authorizing the app issues a random
+one-use code with a 60-second lifetime. Only the Mac holding the original
+PKCE S256 verifier can exchange it for a 24-hour flasher session. The verifier
+never appears in the browser URL. The callback scheme and state are checked.
 
-| Credential | Purpose | Where it goes |
+The session is held only in Keychain and sent over HTTPS in the Authorization
+header. TMedge stores its SHA-256 digest and account binding in a private file,
+never the token. Every provisioning call checks expiry, revocation and the
+account's current password fingerprint. Removing the account, changing its
+password, signing out in the app or revoking it in Adoption ends access.
+
+| Credential | Purpose | Destination |
 | --- | --- | --- |
-| Wi-Fi password | Join the selected network | USB serial → TMsense NVS |
-| Sensor signing key (`TM_KEY` for the current legacy board) | Authenticate the node session and reports | USB serial → TMsense NVS; matching edge configuration |
-| Provisioning token (`TMFLASH_TOKEN`) | Queue a node admission request and poll its status | TMflash Keychain → HTTPS Authorization header → console provisioning routes |
-| Admin password | Approve or deny the queued request | Protected admin console routes |
+| Algo account password | Verify the person | Existing browser sign-in only |
+| Expiring flasher session | Queue adoption and read approval status | Keychain → authenticated machine API |
+| Wi-Fi password | Join the selected network | USB → node NVS |
+| Sensor key | Authenticate node sessions and reports | USB → node NVS; matching edge key configuration |
 
-The provisioning token is never flashed to the sensor. It cannot approve a
-request. Approval persists a MAC registration and leaves the node unplaced;
-an administrator must place it before it contributes to a seat or zone.
-Already registered nodes do not require a new provisioning request to report.
+The flasher session is never written to the board. It cannot approve devices,
+read imagery, change floor placement or operate the console. No Cloudflare
+service token is required.
 
-## Changes
+## Adoption and verification
 
-- TMflash validates the configured URL and token before flashing. Selecting
-  admission without both credentials no longer silently skips admission.
-- Remote endpoints require HTTPS. URL credentials, queries and fragments are
-  rejected; loopback HTTP remains available for local tests and SSH tunnels.
-- Requests do not follow redirects. HTTP 200 is accepted only with a JSON
-  provisioning response for the requested MAC and a recognized status.
-- Invalid responses and token refusals fail admission instead of claiming a
-  pending request. Server error bodies cannot echo secrets into the log.
-- Editing the URL or token clears the old Test result; a late response for
-  previous credentials cannot overwrite it.
-- TMedge rejects bearer headers with extra fields or comma-separated values,
-  validates status MACs, and rejects configured tokens that cannot travel in
-  the header. Both sides require 24+ printable ASCII characters without
-  spaces, commas or line breaks.
-- The app now points users to `console.hkumyseat.com` for provisioning.
-  `sense.hkumyseat.com` is the node listener.
+1. Before esptool or any USB writes, TMflash requires a valid account session
+   and `tmflash.adoption.v1` preflight confirming durable storage.
+2. Firmware exposes its UID over USB. TMflash queues a pending request and
+   shows its UID and eight-character request code. Pending requests survive
+   restarts and expire after the existing request TTL.
+3. An operator signs into algo → Adoption, compares the physical request and
+   types its UID/code. Only that human endpoint can admit it. The same guard
+   applies to the embedded legacy console's approval endpoint.
+4. Registration is persisted before the live registry changes. A new device
+   has no floor, pose or owned tables. Where a device-key policy is enabled,
+   its key must be enrolled before approval. Account sign-in does not replace
+   telemetry authentication or change the firmware key protocol.
+5. TMflash reboots and requires a fresh ACK from that boot for direct WSS.
+   Adoption marks verified only while a fresh authenticated report exists.
+   Silent nodes never imply empty seats.
 
-## Evidence
+HTTP redirects and HTML login pages are rejected. Server error bodies are
+never copied into logs. Editing the console URL invalidates the Test result
+and prevents sending an account credential to another console.
 
-- All 61 Swift tests pass. They cover serial provisioning through pseudo-terminal nodes,
-  FPS readback, admission failures, polling, malformed responses and missing
-  credentials. SwiftUI snapshots show the FPS buttons in light and dark mode.
-- A native Swift client exercised the real local TMedge HTTP routes: valid
-  and invalid tokens, HTML and redirect rejection, pending request, status
-  polling, admin approval, persisted registration and re-registration. The
-  redirect destination received no request.
-- The real host-compiled TMsense cloud session was refused before registration.
-  After guarded admin approval it authenticated and received an acknowledgement
-  for its signed report. Bearer-only approval and admin approval without the
-  console mutation header were refused.
-- The USB board runs TMsense 1.6. Measured complete-frame rates were about
-  0.98, 1.95 and 3.91 fps for the 1, 2 and 4 fps selections; each survived a
-  reboot. Invalid rates were rejected. The board was restored to 1 fps and
-  joined the requested `EsanHouse` network. A final USB status read confirmed
-  `wss ready`, Wi-Fi joined and a report acknowledgement `0 s ago`.
-  At the user's subsequent request, the board was saved at **4 fps** and
-  rebooted again. Readback confirmed 4 fps, the live edge acknowledged a
-  report from the new boot, and complete-frame sampling measured **3.90 fps**.
+## Deployment
 
-## Live findings and remaining checks
+Deploy matching TMedge changes through its tested release pipeline with
+production approval. `NODES_CONFIG` must point at a writable registry outside
+release directories; `DATA_DIR` holds sessions, audits and report state.
+`TMFLASH_TOKEN` is optional compatibility, not an account-login requirement.
 
-A read-only inspection of the production environment found **no configured
-`TMFLASH_TOKEN`**. The live origin refused provisioning status requests with
-HTTP 401. New-node commissioning through TMflash is therefore disabled until
-the production provisioning token is configured. Admin authentication and the
-node listener are configured; the existing USB node's signed reporting works
-independently of this token.
+Cloudflare must permit these native endpoints to reach TMedge without browser
+cookies or a service token:
 
-Unauthenticated public provisioning probes from this Mac returned HTTP 403.
-The external sign-in/proxy route must also be verified with a real configured
-token when commissioning is enabled. No production settings were changed.
+- `algo.hkumyseat.com/api/provision/*`
+- `algo.hkumyseat.com/api/tmflash/exchange`
+- `algo.hkumyseat.com/api/tmflash/logout`
 
-The full edge test suite has 419 passes, five skips and one unrelated oversized-upload test failure:
-`uploads: size, type and name are checked before anything is kept` fails with
-`fetch failed` / a connection reset. All 41 selected provisioning, console security,
-direct-node authentication, encrypted-parser and durable-ingest tests pass,
-as does typecheck.
+Use separate path-specific Access applications with Bypass / Include Everyone
+for these endpoints only. TMedge independently authenticates them. Keep the
+main algo application, `/tmflash/connect`, `/api/tmflash/authorize`, Adoption,
+and the console protected by their existing human policy. Unauthenticated
+public preflight must return TMedge JSON 401, never Cloudflare HTML/403. See
+[Cloudflare path precedence](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)
+and [endpoint exceptions](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/common-policies/).
 
-The legacy wire cross-check passes, but the encrypted-v2 cross-check cannot
-pass with this TMsense checkout: its host session ignores the requested
-`secure` mode and uses the legacy signing key and boot counter. TMedge expects
-per-device encryption in that portion of the harness. The successful native
-end-to-end test verifies the legacy path used by this physical board; it does
-not establish encrypted-v2 firmware compatibility. No wire format or
-encryption-policy migration was made in this task.
+## Hardware baseline
+
+The connected board `30:ed:a0:cb:f5:f8` runs TMsense 1.6 with persisted **4 fps**
+and the requested site Wi-Fi. Previous complete-frame sampling measured
+**3.90 fps**, with an ACK from the new boot. This existing registration
+continues reporting independently of adoption sign-in. No packet layout,
+NVS erasure or device-key migration is part of this change.
+
+The account flow has local HTTP, Swift, browser and firmware fixtures.
+Public browser-to-app sign-in still requires the matching production release
+and path-specific Cloudflare configuration.

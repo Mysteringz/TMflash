@@ -48,19 +48,24 @@ final class AppModel: ObservableObject {
     @Published var rememberSecrets = true { didSet { defaults.set(rememberSecrets, forKey: "rememberSecrets"); persistSecrets() } }
     @Published var flashFirmware = true
 
-    /// Where to ask for a flashed node to be admitted, and the token that
-    /// buys the right to ask. The URL is ordinary configuration; the token
+    /// Where to ask for a flashed node to be admitted. Account access
+    /// is bound to this URL; its expiring credential
     /// is a secret and lives only in the Keychain.
-    @Published var edgeURL = "" { didSet { defaults.set(edgeURL, forKey: "edgeURL"); edgeCheck = nil } }
-    @Published var edgeToken = "" { didSet { persistEdgeToken(); edgeCheck = nil } }
+    @Published var edgeURL = "https://algo.hkumyseat.com" { didSet { defaults.set(edgeURL, forKey: "edgeURL"); edgeCheck = nil } }
+    @Published var edgeSession: FlasherSession? { didSet { persistEdgeSession(); edgeCheck = nil } }
+    @Published var signingIn = false
+    private let browserLogin = BrowserLogin()
     @Published var registerWithEdge = false { didSet { defaults.set(registerWithEdge, forKey: "registerWithEdge") } }
     /// Result of the last Test, for the person setting this up.
     @Published var edgeCheck: String?
     @Published var edgeChecking = false
 
     var edgeServer: EdgeServer? {
-        let s = EdgeServer(url: edgeURL, token: edgeToken)
+        let s = configuredEdgeServer
         return registerWithEdge && s.isConfigured ? s : nil
+    }
+    var configuredEdgeServer: EdgeServer {
+        EdgeServer(url: edgeURL, token: edgeSession.flatMap { AccountClient.matches($0, url: edgeURL) ? $0.token : nil } ?? "")
     }
     @Published var projectDir: String? { didSet { defaults.set(projectDir, forKey: "projectDir") } }
 
@@ -103,9 +108,11 @@ final class AppModel: ObservableObject {
             s.password = SecretStore.get("wifi-password") ?? ""
             s.key = SecretStore.get("signing-key") ?? ""
         }
-        edgeURL = defaults.string(forKey: "edgeURL") ?? ""
+        edgeURL = defaults.string(forKey: "edgeURL") ?? "https://algo.hkumyseat.com"
         registerWithEdge = defaults.bool(forKey: "registerWithEdge")
-        edgeToken = SecretStore.get("edge-token") ?? ""
+        if let stored = SecretStore.get("flasher-session-v1")?.data(using: .utf8) {
+            edgeSession = try? JSONDecoder().decode(FlasherSession.self, from: stored)
+        }
         settings = s
         let hint = Bundle.main.object(forInfoDictionaryKey: "TMSenseDir") as? String
         projectDir = defaults.string(forKey: "projectDir").flatMap { FirmwareProject.isProject($0) ? $0 : nil }
@@ -132,26 +139,55 @@ final class AppModel: ObservableObject {
         persistSecrets()
     }
 
-    private var lastEdgeToken: String?
-    private func persistEdgeToken() {
+    private func persistEdgeSession() {
         guard live else { return }
-        if lastEdgeToken == edgeToken { return }
-        lastEdgeToken = edgeToken
-        SecretStore.set("edge-token", edgeToken)
+        let data = edgeSession.flatMap { try? JSONEncoder().encode($0) }
+        SecretStore.set("flasher-session-v1", data.map { String(decoding: $0, as: UTF8.self) } ?? "")
     }
 
-    /// Ask the edge whether it is there and whether it likes the token.
+    func signInAccount() {
+        guard !signingIn else { return }
+        let url = edgeURL
+        signingIn = true
+        edgeCheck = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.signingIn = false }
+            do {
+                let session = try await self.browserLogin.signIn(url: url)
+                guard AccountClient.matches(session, url: self.edgeURL) else {
+                    try? await AccountClient.signOut(session)
+                    self.edgeCheck = "The console URL changed while signing in. Sign in again."
+                    return
+                }
+                self.edgeSession = session
+                self.edgeCheck = "Signed in as \(session.user). The session expires in 24 hours."
+            } catch { self.edgeCheck = (error as? EdgeError)?.description ?? "Could not complete console sign-in." }
+        }
+    }
+
+    func signOutAccount() {
+        guard let session = edgeSession else { return }
+        edgeSession = nil
+        edgeCheck = "Signed out on this Mac."
+        Task { @MainActor [weak self] in
+            do { try await AccountClient.signOut(session) }
+            catch { self?.edgeCheck = "Signed out on this Mac. Server revocation failed; revoke this session in Adoption." }
+        }
+    }
+
+    /// Verify account access and durable adoption storage before flashing.
     func checkEdge() {
-        let server = EdgeServer(url: edgeURL, token: edgeToken)
+        let server = configuredEdgeServer
         guard server.isConfigured else {
-            edgeCheck = "Enter the console URL and a token first."
+            edgeCheck = "Sign in with your algo account first."
             return
         }
         edgeChecking = true
         edgeCheck = nil
         Task { @MainActor [weak self] in
             let answer = await EdgeClient.check(server)
-            if self?.edgeURL == server.url && self?.edgeToken == server.token { self?.edgeCheck = answer }
+            if self?.configuredEdgeServer == server { self?.edgeCheck = answer }
             self?.edgeChecking = false
         }
     }
@@ -266,7 +302,10 @@ final class AppModel: ObservableObject {
             out.append("Identifying the board…")
         }
         out += settings.problems()
-        if registerWithEdge { out += EdgeServer(url: edgeURL, token: edgeToken).problems() }
+        if registerWithEdge {
+            if let session = edgeSession, AccountClient.matches(session, url: edgeURL) { out += configuredEdgeServer.problems() }
+            else { out.append("Sign in with your algo account for this console before adopting a device") }
+        }
         if flashFirmware {
             if toolchain == nil { out.append("PlatformIO is not installed (brew install platformio)") }
             if projectDir == nil { out.append("Choose the TMsense firmware folder") }

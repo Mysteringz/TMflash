@@ -13,10 +13,9 @@
 import Foundation
 
 public struct EdgeServer: Equatable, Sendable {
-    /// The console's base URL, e.g. https://console.hkumyseat.com.
+    /// The adoption console's base URL, e.g. https://algo.hkumyseat.com.
     public var url: String
     public var token: String
-
     public init(url: String, token: String) {
         self.url = url
         self.token = token
@@ -79,7 +78,7 @@ public enum EdgeClient {
         guard let u = URL(string: text), let scheme = u.scheme?.lowercased(), let host = u.host,
               !host.isEmpty, scheme == "https" || scheme == "http",
               u.user == nil, u.password == nil, u.query == nil, u.fragment == nil else {
-            throw EdgeError("Enter a console URL like https://console.hkumyseat.com, without credentials, a query or a fragment")
+            throw EdgeError("Enter a console URL like https://algo.hkumyseat.com, without credentials, a query or a fragment")
         }
         if scheme == "http" && !["localhost", "127.0.0.1", "[::1]", "::1"].contains(host.lowercased()) {
             throw EdgeError("Use HTTPS for the provisioning token; HTTP is allowed only for a local test or SSH tunnel")
@@ -93,6 +92,8 @@ public enum EdgeClient {
         var r = URLRequest(url: url)
         r.httpMethod = method
         r.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
+        r.setValue("application/json", forHTTPHeaderField: "Accept")
+        r.cachePolicy = .reloadIgnoringLocalCacheData
         r.timeoutInterval = 15
         if let body {
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -101,33 +102,41 @@ public enum EdgeClient {
         return r
     }
 
-    /// Does this server answer, and does it accept the token? Used by the
-    /// Test button, so the answer has to be a sentence someone can act on.
+    /// Required before opening USB or invoking esptool. A login page or a
+    /// valid credential on an older, incompatible edge cannot pass this gate.
+    public static func preflight(_ server: EdgeServer) async throws {
+        let r = try request(server, "api/provision/preflight", method: "GET")
+        let (data, response) = try await session.data(for: r)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw responseError(code) }
+        _ = try jsonBody(data, response: response)
+        struct Preflight: Decodable { let `protocol`: String; let ready: Bool; let approval: String }
+        guard let json = try? JSONDecoder().decode(Preflight.self, from: data), json.protocol == "tmflash.adoption.v1",
+              json.ready, json.approval == "human" else {
+            throw EdgeError("The console has no compatible, ready adoption service. Update TMedge before flashing.")
+        }
+    }
+
     public static func check(_ server: EdgeServer) async -> String {
-        do {
-            // Asking the status of a uid that cannot exist: it touches the
-            // same token check as a real request but queues nothing.
-            let r = try request(server, "api/provision/status/00:00:00:00:00:00", method: "GET")
-            let (data, response) = try await session.data(for: r)
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            switch code {
-            case 200:
-                _ = try statusBody(data, response: response, uid: "00:00:00:00:00:00")
-                return "Connected. The token is accepted."
-            case 401: return "Reached the server, but it refused the token."
-            case 301...308: return "The server redirected to another page. Use the console provisioning URL and allow its API through the sign-in proxy."
-            case 404: return "Reached the server, but it has no provisioning endpoint. Use the console URL, rather than the sensor URL."
-            default: return "Reached the server, but it answered HTTP \(code)."
-            }
-        } catch let error as EdgeError {
-            return error.description
-        } catch {
-            return "Could not reach the server: \(error.localizedDescription)"
+        do { try await preflight(server); return "Connected. Console access is verified. Adoption is ready." }
+        catch let error as EdgeError { return error.description }
+        catch { return "Could not reach the server. Check the console URL and network connection." }
+    }
+
+    private static func responseError(_ code: Int) -> EdgeError {
+        switch code {
+        case 401: return EdgeError("The console refused the sign-in credential. Sign in again with your algo account.")
+        case 403: return EdgeError("Cloudflare refused the account API. Check the policy for the TMflash and provisioning API paths.")
+        case 301...308: return EdgeError("The account API redirected to browser sign-in. Check its Cloudflare API policy.")
+        case 404: return EdgeError("This server has no adoption endpoint. Use https://algo.hkumyseat.com and update TMedge.")
+        case 503: return EdgeError("Adoption storage is unavailable. Fix persistent node storage on TMedge before flashing.")
+        default: return EdgeError("The provisioning endpoint answered HTTP \(code).")
         }
     }
 
     /// Queue a join request. Returns whether the node is already known.
-    public static func requestJoin(_ server: EdgeServer, uid: String, label: String, firmware: String?) async throws -> AdmissionState {
+    public static func requestJoin(_ server: EdgeServer, uid: String, label: String, firmware: String?,
+                                   log: @Sendable (String) -> Void = { _ in }) async throws -> AdmissionState {
         guard validUID(uid) else { throw EdgeError("The node did not report a valid MAC identity") }
         var body: [String: Any] = ["uid": uid, "label": label]
         if let firmware { body["firmware"] = firmware }
@@ -142,10 +151,11 @@ public enum EdgeClient {
             let json = try jsonBody(data, response: response)
             guard json["status"] as? String == "pending", json["uid"] as? String == uid,
                   let id = json["id"] as? String, !id.isEmpty else { throw EdgeError("The edge did not confirm a pending request for this node") }
+            if let code = json["pairingCode"] as? String, code.range(of: #"^[0-9A-F]{8}$"#, options: .regularExpression) != nil {
+                log("Adoption request code: \(code) — match this code and UID \(uid) in the Adoption tab")
+            }
             return .pending
-        case 401: throw EdgeError("the edge refused the provisioning token")
-        case 301...308: throw EdgeError("the provisioning endpoint redirected to sign-in; use the console provisioning URL and allow its API through the sign-in proxy")
-        default: throw EdgeError("the provisioning endpoint answered HTTP \(code)")
+        default: throw responseError(code)
         }
     }
 
@@ -188,12 +198,12 @@ public enum EdgeClient {
                             timeout: TimeInterval,
                             log: @Sendable (String) -> Void = { _ in }) async -> AdmissionState {
         do {
-            let first = try await requestJoin(server, uid: uid, label: label, firmware: firmware)
+            let first = try await requestJoin(server, uid: uid, label: label, firmware: firmware, log: log)
             if first == .registered {
                 log("TMedge already knows \(uid)")
                 return .registered
             }
-            log("asked TMedge to admit \(uid) — waiting for someone to allow it in the console")
+            log("asked TMedge to admit \(uid) — waiting for an administrator in the Adoption tab")
             let deadline = Date().addingTimeInterval(timeout)
             while Date() < deadline {
                 try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
@@ -203,7 +213,7 @@ public enum EdgeClient {
                     return .registered
                 }
                 if s == "unknown" {
-                    log("the request for \(uid) was turned down")
+                    log("the request for \(uid) was denied or expired")
                     return .denied
                 }
             }
