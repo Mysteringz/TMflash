@@ -75,8 +75,14 @@ also installed, the same board appears a second time as
    - LoRa: the **TMLAccess IP**. *The firmware has no LoRa uplink yet.* A
      node in LoRa mode stores the setting and says so on its console, but it
      sends nothing until LoRa support ships. TMflash warns about this.
-4. Enter the **signing key**: TMedge's `TM_KEY`, the same on every node.
-5. Press **Flash**.
+4. Under **Sensor**, choose **1 fps**, **2 fps** or **4 fps**, or leave
+   **Keep current** selected. These are visible buttons in a segmented selector.
+   A fresh node defaults to 1 fps. Changing
+   the rate requires TMsense 1.6 or newer; flashing the current firmware adds
+   support. The choice applies to every selected board in batch mode and is
+   checked against the node's saved settings.
+5. Enter the **signing key**: TMedge's `TM_KEY`, the same on every node.
+6. Press **Flash**.
 
 Scanning uses this Mac's Wi-Fi adapter, so the board does not need firmware
 installed yet. Run the built **TMflash.app** and allow its Location Services
@@ -100,6 +106,34 @@ range, or when scanning is unavailable. **Keep node’s current network** leaves
 the saved SSID untouched. A rescan never changes your selection. The selected
 SSID and entered password are provisioned over USB after flashing; in batch
 mode they apply to every selected board.
+
+**TMedge admission**
+
+Enable **Adopt each node after flashing** for a new board. Set the console URL
+to `https://algo.hkumyseat.com`, then click **Sign in with algo account**.
+Complete the existing browser sign-in and authorize TMflash. No service token
+or copied provisioning token is needed. Your password stays in the browser;
+an expiring 24-hour session stays in the Mac's Keychain.
+
+**Test** checks account access and persistent registration storage. This same
+check must pass before any USB write or firmware flashing. A sign-in page,
+redirect, refusal or malformed response fails the job. HTTPS is required
+except for loopback fixtures or SSH tunnels.
+
+After flashing, compare the device UID and request code shown in TMflash with
+the **Adoption** tab in the algo console. Type both to approve that physical
+device. It remains unplaced until an operator installs it in the floor plan.
+For direct cloud, success also requires a fresh report ACK from the rebooted
+board. Wi-Fi connection or approval alone cannot pass verification.
+
+Sign out in TMflash or revoke its session in Adoption to end access. Account
+removal and password changes invalidate it immediately. The CLI's `--adopt`
+uses the account session from TMflash.app's Keychain; it asks macOS for access
+when needed. Legacy `TMFLASH_TOKEN` CLI configuration remains supported for
+existing integrations, but is not required for the app.
+
+See [the verification pipeline](docs/TOKEN_PIPELINE.md) for deployment
+requirements and the remaining public verification step.
 
 **Batch**
 
@@ -189,10 +223,18 @@ never from arguments, which would end up in shell history and `ps`:
 CLI=build/TMflash.app/Contents/MacOS/tmflash-cli      # or: swift run tmflash-cli
 $CLI ports --probe
 TMFLASH_PASSWORD=… TMFLASH_KEY=… $CLI flash --port /dev/cu.usbserial-0001 --id 3 \
-    --ssid ExampleWiFi --gateway 192.0.2.10
+    --ssid ExampleWiFi --gateway 192.0.2.10 --fps 2
 TMFLASH_PASSWORD=… TMFLASH_KEY=… $CLI batch --ports /dev/cu.usbserial-0001,/dev/cu.usbserial-0002 \
-    --start 11 --end 12 --ssid ExampleWiFi --gateway 192.0.2.10
+    --start 11 --end 12 --ssid ExampleWiFi --gateway 192.0.2.10 --fps 4
 ```
+
+`--fps` accepts only `1`, `2` or `4`. Omit it to keep the node's current rate.
+With `--no-flash`, rate selection requires TMsense 1.6 or newer already on the
+board; older firmware is refused before any settings are written.
+
+Set both `TMEDGE_URL` and `TMFLASH_TOKEN` in the environment to request edge
+admission from the CLI. Supplying only one is an error before building or
+flashing. Omit both when updating an already registered board.
 
 ## Tests
 
@@ -218,12 +260,15 @@ Other tests cover:
 - collapsing a board that appears under two drivers.
 - Wi-Fi band filtering, duplicate SSIDs, exact SSID bytes, permission and scan
   failures, and provisioning a scanned SSID through a fake node.
+- frame-rate readback, persistence, old-firmware refusal and invalid rates;
+- token refusal, sign-in pages, malformed responses, admission polling and
+  credential changes invalidating a previous verification result.
 
 To check the UI without hardware:
 
 ```sh
 swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch --dark
-# scenes: single, batch, batch-large, lora, cloud, cloud-done, running, done, empty, hotspot, wifi-scanning, wifi-empty, wifi-denied
+# scenes: single, fps1, fps2, fps4, batch, batch-large, lora, cloud, cloud-done, running, done, empty, hotspot, wifi-scanning, wifi-empty, wifi-denied
 ```
 
 ## Continuous integration

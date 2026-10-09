@@ -207,7 +207,6 @@ struct SettingsForm: View {
     @EnvironmentObject var model: AppModel
     @State private var showPassword = false
     @State private var showKey = false
-    @State private var showEdgeToken = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -224,6 +223,20 @@ struct SettingsForm: View {
                             TextField("to", text: $model.endIDText).frame(width: 90)
                         }
                     }
+                }
+            }
+
+            FormSection("Sensor") {
+                Field("Frame rate", hint: "Complete thermal frames per second") {
+                    Picker("Frame rate", selection: $model.settings.frameRate) {
+                        Text("Keep current").tag(Optional<FrameRate>.none)
+                        ForEach(FrameRate.allCases, id: \.self) { fps in
+                            Text(fps.title).tag(Optional(fps))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 330)
                 }
             }
 
@@ -299,32 +312,34 @@ struct SettingsForm: View {
                 }
             }
 
-            FormSection("TMedge server") {
+            FormSection("TMedge adoption") {
                 Field("") {
-                    Toggle("Ask TMedge to admit each node after flashing", isOn: $model.registerWithEdge)
+                    Toggle("Adopt each node through TMedge", isOn: $model.registerWithEdge)
                 }
-                Field("Console URL", hint: "e.g. https://sense.hkumyseat.com") {
+                Field("Console URL", hint: "https://algo.hkumyseat.com") {
                     TextField("https://…", text: $model.edgeURL)
                         .frame(width: 260)
                         .disabled(!model.registerWithEdge)
                 }
-                Field("Token", hint: "TMFLASH_TOKEN from the edge — kept in the Keychain, never logged") {
+                Field("Algo account", hint: "Server-verified sign-in — session kept in the Keychain") {
                     HStack {
-                        Group {
-                            if showEdgeToken { TextField("", text: $model.edgeToken) }
-                            else { SecureField("", text: $model.edgeToken) }
-                        }.frame(width: 260)
-                        RevealButton(on: $showEdgeToken)
+                        if let session = model.edgeSession, AccountClient.matches(session, url: model.edgeURL) {
+                            Text(session.user).font(.system(.body, design: .monospaced))
+                            Button("Sign out") { model.signOutAccount() }.controlSize(.small)
+                        } else {
+                            Button(model.signingIn ? "Signing in…" : "Sign in with algo account") { model.signInAccount() }
+                                .disabled(model.signingIn)
+                        }
                         Button("Test") { model.checkEdge() }
                             .controlSize(.small)
-                            .disabled(model.edgeChecking)
+                            .disabled(model.edgeChecking || model.signingIn || model.edgeServer == nil)
                     }.disabled(!model.registerWithEdge)
                 }
                 if let note = model.edgeCheck {
                     Field("") { Text(note).font(.caption).foregroundStyle(.secondary) }
                 }
                 Field("") {
-                    Text("A node is admitted by somebody with the edge's debug console open. It joins with no floor, no position and no tables, so it cannot change any occupancy number until it is placed there.")
+                    Text("Sign in through the console's account verification. Your session is checked before any device write. In Adoption, an administrator matches the UID and request code, then approves the node. TMflash checks for a fresh accepted report after reboot.")
                         .font(.caption).foregroundStyle(.secondary).frame(width: 330, alignment: .leading)
                 }
             }

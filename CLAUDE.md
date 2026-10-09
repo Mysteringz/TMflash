@@ -37,6 +37,7 @@ scripts/build-app.sh [install]
   names (`uid`, `fw`, `node_id`, `mode`, `lora_gw`, `ssid`, `password`,
   `edges`, `key`, then from 1.4 `transport`, `cloud_url`, `caps`, `uplink`,
   `report_ack`, then `boot`) and the `<name> updated` / `saved` replies.
+  From 1.6, `fps` is also before `boot`; capability `fps1` enables `set fps`.
   Change both sides together.
 - **Ask the firmware before using new commands.** `caps` containing `wss1`
   means it knows `transport`/`cloud_url`; without it nothing about transport
