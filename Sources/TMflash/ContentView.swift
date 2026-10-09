@@ -227,6 +227,20 @@ struct SettingsForm: View {
                 }
             }
 
+            FormSection("Sensor") {
+                Field("Frame rate", hint: "Complete thermal frames per second") {
+                    Picker("Frame rate", selection: $model.settings.frameRate) {
+                        Text("Keep current").tag(Optional<FrameRate>.none)
+                        ForEach(FrameRate.allCases, id: \.self) { fps in
+                            Text(fps.title).tag(Optional(fps))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 330)
+                }
+            }
+
             FormSection("Uplink") {
                 Field("Mode", hint: model.settings.mode == .lora ? "Node → TMLAccess over LoRa"
                                     : model.settings.transport == .wss ? "Node → TMedge over the site's Wi-Fi and the internet"
@@ -303,7 +317,7 @@ struct SettingsForm: View {
                 Field("") {
                     Toggle("Ask TMedge to admit each node after flashing", isOn: $model.registerWithEdge)
                 }
-                Field("Console URL", hint: "e.g. https://sense.hkumyseat.com") {
+                Field("Console URL", hint: "e.g. https://console.hkumyseat.com") {
                     TextField("https://…", text: $model.edgeURL)
                         .frame(width: 260)
                         .disabled(!model.registerWithEdge)

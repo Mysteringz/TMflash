@@ -21,6 +21,9 @@ final class FakeNode: @unchecked Sendable {
     var wifiJoins = true
     /// Firmware with the direct-to-cloud transport (tmsense-1.4+): `caps`, `transport`, `cloud_url`.
     var directCloud = true
+    /// Firmware with `set fps` and the configured rate in `show` (tmsense-1.6+).
+    var frameRateSelection = true
+    var ignoreFrameRate = false
     /// With transport wss, the edge acknowledges a report after the reboot.
     var edgeAccepts = true
     /// The raw bytes of every line received, to prove a long line is sent whole.
@@ -44,7 +47,7 @@ final class FakeNode: @unchecked Sendable {
         tcgetattr(s, &t); cfmakeraw(&t); tcsetattr(s, TCSANOW, &t)
         self.uid = uid
         ram = ["node_id": "(unset)", "mode": "wifi", "lora_gw": "(none)", "ssid": "(unset)", "password": "(unset)",
-               "edges": "(none) ", "key": "(unset - telemetry unsigned)", "transport": "udp", "cloud_url": "(none)"]
+               "edges": "(none) ", "key": "(unset - telemetry unsigned)", "transport": "udp", "cloud_url": "(none)", "fps": "1"]
         saved = ram
     }
 
@@ -111,17 +114,19 @@ final class FakeNode: @unchecked Sendable {
         case "show":
             lock.lock(); let r = ram; lock.unlock()
             say("uid       : \(uid)")
-            say("fw        : \(directCloud ? "tmsense-1.4" : "tmsense-1.1")")
+            say("fw        : \(frameRateSelection ? "tmsense-1.6" : directCloud ? "tmsense-1.4" : "tmsense-1.1")")
             var keys = ["node_id", "mode", "lora_gw", "ssid", "password", "edges", "key"]
             if directCloud { keys += ["transport", "cloud_url"] }
             for k in keys {
                 say("\(k.padding(toLength: 10, withPad: " ", startingAt: 0)): \(r[k] ?? "")")
             }
             if directCloud {
-                say("caps      : wss1,ota-https1")
                 say("uplink    : \(r["transport"] == "wss" ? "wss off" : "udp, wifi not joined")")
                 say("report_ack: \(r["transport"] == "wss" ? "never" : "n/a (udp has no acknowledgement)")")
             }
+            var caps = directCloud ? ["wss1", "ota-https1"] : []
+            if frameRateSelection { caps.append("fps1"); say("fps       : \(r["fps"] ?? "1")") }
+            if !caps.isEmpty { say("caps      : \(caps.joined(separator: ","))") }
             say("boot      : 7   last_cmd: 0")
             say("param min_contrast = 50 centi-C")
         case "set" where parts.count == 3:
@@ -136,6 +141,9 @@ final class FakeNode: @unchecked Sendable {
             case "pass": ram["password"] = "(set)"
             case "edges": ram["edges"] = value + " "
             case "key": ram["key"] = "(set)"
+            case "fps" where frameRateSelection:
+                guard ["1", "2", "4"].contains(value) else { lock.unlock(); say("invalid: fps must be 1, 2 or 4"); return }
+                if !ignoreFrameRate { ram["fps"] = value }
             case "cloud_url" where directCloud:
                 guard value.hasPrefix("wss://"), value.count <= 128, !value.contains("?") else {
                     lock.unlock(); say("invalid: cloud_url must start with wss://"); return

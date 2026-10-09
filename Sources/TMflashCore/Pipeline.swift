@@ -130,6 +130,7 @@ public enum Pipeline {
         let log: @Sendable (String) -> Void = { events(.log(port: port, $0)) }
         var result = JobResult(job: job)
         do {
+            if let server = options.server, let problem = server.problems().first { throw SerialError(problem) }
             if let writer {
                 events(.stage(port: port, .flashing(0)))
                 result.uid = try await writer.write(port: port, log: log) { events(.stage(port: port, .flashing($0))) }
@@ -207,6 +208,9 @@ public enum Pipeline {
         if settings.mode == .wifi && settings.transport == .wss && !before.supportsDirectCloud {
             throw SerialError("\(before.firmware ?? "this firmware") has no direct-to-cloud transport: flash the current TMsense, or choose the local gateway")
         }
+        if settings.frameRate != nil && !before.supportsFrameRate {
+            throw SerialError("\(before.firmware ?? "this firmware") has no frame-rate selection: flash TMsense 1.6 or newer, or keep the node's current rate")
+        }
         stage(.provisioning)
         for c in ConsoleCommand.provisioning(id: job.nodeID, settings: settings, directCloud: before.supportsDirectCloud) { try console.run(c) }
         let after = try console.show()
@@ -229,6 +233,8 @@ public enum Pipeline {
             case .registered: break
             case .denied:
                 throw SerialError("TMedge turned down the request to admit \(uid): the node is flashed but will not be allowed to connect")
+            case .failed(let reason):
+                throw SerialError("TMedge admission failed: \(reason)")
             case .pending, .timedOut:
                 notes.append("TMedge has not admitted \(uid) yet — the request is waiting in the edge console; the node will connect once somebody allows it")
             }

@@ -14,6 +14,7 @@ usage:
                                           flash + provision all supplied nodes at once, IDs N..M in port order
 options:
   --mode wifi|lora      uplink (default wifi)
+  --fps 1|2|4           complete thermal frames per second (default: keep current; TMsense 1.6+)
   --ssid NAME           Wi-Fi network (wifi mode)
   --gateway IP          TMWAccess IP (wifi) or TMLAccess IP (lora); with wss, kept for a USB rollback
   --transport udp|wss   wifi only: local gateway (udp, default) or straight to TMedge (wss; TMsense 1.4+)
@@ -57,9 +58,14 @@ let out = FileHandle.standardOutput
     let env = ProcessInfo.processInfo.environment
     guard let mode = UplinkMode(rawValue: opts["--mode"] ?? "wifi") else { fail("--mode must be wifi or lora") }
     guard let transport = UplinkTransport(rawValue: opts["--transport"] ?? "udp") else { fail("--transport must be udp or wss") }
+    var frameRate: FrameRate?
+    if let value = opts["--fps"] {
+        guard let fps = Int(value).flatMap(FrameRate.init(rawValue:)) else { fail("--fps must be 1, 2 or 4") }
+        frameRate = fps
+    }
     let s = NodeSettings(mode: mode, ssid: opts["--ssid"] ?? "", password: env["TMFLASH_PASSWORD"] ?? "",
                          gateway: opts["--gateway"] ?? "", key: env["TMFLASH_KEY"] ?? "", transport: transport,
-                         cloudURL: NodeSettings.canonicalCloudURL(opts["--cloud-url"] ?? ""))
+                         cloudURL: NodeSettings.canonicalCloudURL(opts["--cloud-url"] ?? ""), frameRate: frameRate)
     let p = s.problems()
     if !p.isEmpty { fail(p.joined(separator: "; ")) }
     return s
@@ -107,16 +113,18 @@ final class MacBox: @unchecked Sendable {
 
 @MainActor func runJobs(_ jobs: [DeviceJob]) async -> Never {
     let settings = settingsFromArgs()
-    let w = await writer()
     var options = PipelineOptions()
     // Like every other secret here, from the environment rather than argv:
     // a command line is visible to every process on the machine.
-    if let url = ProcessInfo.processInfo.environment["TMEDGE_URL"],
-       let token = ProcessInfo.processInfo.environment["TMFLASH_TOKEN"], !url.isEmpty, !token.isEmpty {
-        options.server = EdgeServer(url: url, token: token)
+    let env = ProcessInfo.processInfo.environment
+    if env["TMEDGE_URL"] != nil || env["TMFLASH_TOKEN"] != nil {
+        let server = EdgeServer(url: env["TMEDGE_URL"] ?? "", token: env["TMFLASH_TOKEN"] ?? "")
+        if let problem = server.problems().first { fail(problem) }
+        options.server = server
     }
     if flags.contains("--no-wifi-check") { options.wifiTimeout = 0 }
     if flags.contains("--no-edge-check") { options.edgeTimeout = 0 }
+    let w = await writer()
     let lastPct = PctBox()
     let results = await Pipeline.run(jobs: jobs, settings: settings, writer: w, options: options) { e in
         switch e {

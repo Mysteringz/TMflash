@@ -51,8 +51,8 @@ final class AppModel: ObservableObject {
     /// Where to ask for a flashed node to be admitted, and the token that
     /// buys the right to ask. The URL is ordinary configuration; the token
     /// is a secret and lives only in the Keychain.
-    @Published var edgeURL = "" { didSet { defaults.set(edgeURL, forKey: "edgeURL") } }
-    @Published var edgeToken = "" { didSet { persistEdgeToken() } }
+    @Published var edgeURL = "" { didSet { defaults.set(edgeURL, forKey: "edgeURL"); edgeCheck = nil } }
+    @Published var edgeToken = "" { didSet { persistEdgeToken(); edgeCheck = nil } }
     @Published var registerWithEdge = false { didSet { defaults.set(registerWithEdge, forKey: "registerWithEdge") } }
     /// Result of the last Test, for the person setting this up.
     @Published var edgeCheck: String?
@@ -98,6 +98,7 @@ final class AppModel: ObservableObject {
         // Absent before direct cloud existed: UDP, as those nodes were.
         s.transport = s.mode == .wifi ? UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp : .udp
         s.cloudURL = defaults.string(forKey: "cloudURL") ?? ""
+        s.frameRate = FrameRate(rawValue: defaults.integer(forKey: "frameRate"))
         if rememberSecrets {
             s.password = SecretStore.get("wifi-password") ?? ""
             s.key = SecretStore.get("signing-key") ?? ""
@@ -126,6 +127,8 @@ final class AppModel: ObservableObject {
         defaults.set(settings.gateway, forKey: settings.mode == .wifi ? "wifiGateway" : "loraGateway")
         defaults.set(settings.transport.rawValue, forKey: "transport")
         defaults.set(settings.cloudURL, forKey: "cloudURL")
+        if let fps = settings.frameRate { defaults.set(fps.rawValue, forKey: "frameRate") }
+        else { defaults.removeObject(forKey: "frameRate") }
         persistSecrets()
     }
 
@@ -148,7 +151,7 @@ final class AppModel: ObservableObject {
         edgeCheck = nil
         Task { @MainActor [weak self] in
             let answer = await EdgeClient.check(server)
-            self?.edgeCheck = answer
+            if self?.edgeURL == server.url && self?.edgeToken == server.token { self?.edgeCheck = answer }
             self?.edgeChecking = false
         }
     }
@@ -263,6 +266,7 @@ final class AppModel: ObservableObject {
             out.append("Identifying the board…")
         }
         out += settings.problems()
+        if registerWithEdge { out += EdgeServer(url: edgeURL, token: edgeToken).problems() }
         if flashFirmware {
             if toolchain == nil { out.append("PlatformIO is not installed (brew install platformio)") }
             if projectDir == nil { out.append("Choose the TMsense firmware folder") }

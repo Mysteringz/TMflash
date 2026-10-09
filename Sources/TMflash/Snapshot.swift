@@ -48,9 +48,12 @@ enum Snapshot {
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
         m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
         m.wifi.state = .ready
+        if scene == "fps1" { m.settings.frameRate = .fps1 }
+        if scene == "fps2" { m.settings.frameRate = .fps2 }
+        if scene == "fps4" { m.settings.frameRate = .fps4 }
         if scene == "tall" {
             m.registerWithEdge = true
-            m.edgeURL = "https://sense.hkumyseat.com"
+            m.edgeURL = "https://console.hkumyseat.com"
             m.edgeToken = String(repeating: "t", count: 32)
             m.edgeCheck = "Connected. The token is accepted."
         }

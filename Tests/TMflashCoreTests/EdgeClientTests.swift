@@ -11,17 +11,21 @@ import XCTest
 /// through URLProtocol rather than over a socket: no ports, no sleeping, and
 /// no chance of the machine's VPN deciding loopback is not allowed today.
 final class StubEdge: URLProtocol {
-    struct Reply: Sendable { var code: Int; var body: String }
-    nonisolated(unsafe) static var requestReply = Reply(code: 202, body: #"{"status":"pending","id":"1"}"#)
+    struct Reply: Sendable { var code: Int; var body: String; var contentType = "application/json" }
+    nonisolated(unsafe) static var requestReply = Reply(code: 202, body: #"{"status":"pending","id":"1","uid":"$uid"}"#)
+    nonisolated(unsafe) static var statusReply: Reply?
     nonisolated(unsafe) static var statuses: [String] = []
     nonisolated(unsafe) static var seenAuth: [String] = []
     nonisolated(unsafe) static var seenBodies: [String] = []
+    nonisolated(unsafe) static var seenURLs: [URL] = []
 
     static func reset() {
-        requestReply = Reply(code: 202, body: #"{"status":"pending","id":"1"}"#)
+        requestReply = Reply(code: 202, body: #"{"status":"pending","id":"1","uid":"$uid"}"#)
+        statusReply = nil
         statuses = []
         seenAuth = []
         seenBodies = []
+        seenURLs = []
     }
 
     static var session: URLSession {
@@ -37,6 +41,7 @@ final class StubEdge: URLProtocol {
 
     override func startLoading() {
         let path = request.url?.path ?? ""
+        if let url = request.url { StubEdge.seenURLs.append(url) }
         StubEdge.seenAuth.append(request.value(forHTTPHeaderField: "Authorization") ?? "")
         // URLProtocol hands the body back as a stream, so read it that way.
         if let stream = request.httpBodyStream {
@@ -49,14 +54,17 @@ final class StubEdge: URLProtocol {
             StubEdge.seenBodies.append(String(decoding: b, as: UTF8.self))
         }
 
+        let requestUID = StubEdge.seenBodies.last.flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["uid"] ?? ""
+        let uid = path.hasSuffix("/request") ? requestUID : request.url?.lastPathComponent ?? ""
         let reply: StubEdge.Reply = path.hasSuffix("/request")
             ? StubEdge.requestReply
-            : Reply(code: 200, body: #"{"status":"\#(StubEdge.statuses.isEmpty ? "unknown" : StubEdge.statuses.removeFirst())"}"#)
+            : StubEdge.statusReply ?? Reply(code: 200, body: #"{"uid":"$uid","status":"\#(StubEdge.statuses.isEmpty ? "unknown" : StubEdge.statuses.removeFirst())"}"#)
 
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.code,
-                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Type": reply.contentType])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
+        client?.urlProtocol(self, didLoad: Data(reply.body.replacingOccurrences(of: "$uid", with: uid).utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
 
@@ -72,7 +80,7 @@ final class EdgeClientTests: XCTestCase {
     }
 
     override func tearDown() {
-        EdgeClient.session = .shared
+        EdgeClient.session = EdgeClient.defaultSession
         EdgeClient.pollInterval = 2
         super.tearDown()
     }
@@ -86,7 +94,7 @@ final class EdgeClientTests: XCTestCase {
     }
 
     func testAnAlreadyKnownNodeIsNotQueuedAgain() async throws {
-        StubEdge.requestReply = .init(code: 200, body: #"{"status":"registered"}"#)
+        StubEdge.requestReply = .init(code: 200, body: #"{"status":"registered","uid":"$uid"}"#)
 
         let state = await EdgeClient.join(StubEdge.server, uid: "30:ed:a0:00:00:01", label: "Node 7", firmware: "1.4.2", timeout: 2)
         XCTAssertEqual(state, .registered)
@@ -128,8 +136,57 @@ final class EdgeClientTests: XCTestCase {
         } catch let e as EdgeError {
             XCTAssertTrue(e.description.contains("token"), e.description)
         }
-        // check() uses the status endpoint, which the stub always allows.
+        StubEdge.statusReply = .init(code: 401, body: #"{"error":"refused"}"#)
         let note = await EdgeClient.check(StubEdge.server)
-        XCTAssertEqual(note, "Connected. The token is accepted.")
+        XCTAssertEqual(note, "Reached the server, but it refused the token.")
+    }
+
+    func testASignInPageOrMalformedJSONNeverVerifiesAToken() async {
+        for reply in [StubEdge.Reply(code: 200, body: "<html>Sign in</html>", contentType: "text/html"),
+                      .init(code: 200, body: "{}"), .init(code: 200, body: "not JSON"),
+                      .init(code: 200, body: #"{"uid":"wrong","status":"registered"}"#)] {
+            StubEdge.statusReply = reply
+            let note = await EdgeClient.check(StubEdge.server)
+            XCTAssertFalse(note.contains("token is accepted"))
+        }
+        StubEdge.statusReply = .init(code: 302, body: "")
+        let note = await EdgeClient.check(StubEdge.server)
+        XCTAssertTrue(note.contains("redirected"))
+    }
+
+    func testRemoteHTTPAndCredentialsInURLsAreRefusedBeforeSendingAToken() throws {
+        for url in ["http://edge.example", "https://user:password@edge.example", "https://edge.example?token=x", "https://edge.example/#x"] {
+            XCTAssertThrowsError(try EdgeClient.request(EdgeServer(url: url, token: StubEdge.server.token), "api/provision/request", method: "POST"))
+        }
+        let local = try EdgeClient.request(EdgeServer(url: "http://127.0.0.1:8090/console/", token: StubEdge.server.token), "api/provision/request", method: "POST")
+        XCTAssertEqual(local.url?.absoluteString, "http://127.0.0.1:8090/console/api/provision/request")
+        XCTAssertFalse(EdgeServer(url: "https://edge.example", token: "short").problems().isEmpty)
+        XCTAssertFalse(EdgeServer(url: "https://edge.example", token: String(repeating: "t", count: 32) + "\n").problems().isEmpty)
+        XCTAssertFalse(EdgeServer(url: "https://edge.example", token: String(repeating: "t", count: 32) + ",").problems().isEmpty)
+    }
+
+    func testTokenRejectionFailsAdmissionAndDoesNotClaimAPendingRequest() async throws {
+        StubEdge.requestReply = .init(code: 401, body: "{}")
+        let state = await EdgeClient.join(StubEdge.server, uid: "30:ed:a0:00:00:06", label: "Node 6", firmware: nil, timeout: 1)
+        guard case .failed(let reason) = state else { return XCTFail("expected a verification failure, got \(state)") }
+        XCTAssertTrue(reason.contains("token"))
+        let node = try FakeNode(uid: "30:ed:a0:00:00:07")
+        node.start()
+        defer { node.stop() }
+        let result = await Pipeline.run(jobs: [DeviceJob(port: node.path, nodeID: 7)], settings: NodeSettings(), writer: nil,
+                                        options: .init(bootTimeout: 5, wifiTimeout: 0, server: StubEdge.server, approvalTimeout: 1)) { _ in }
+        XCTAssertFalse(result[0].ok)
+        XCTAssertTrue(result[0].error?.contains("refused the provisioning token") == true)
+        XCTAssertFalse(node.commands.contains("reboot"), "a refused admission is not reported as a waiting success")
+    }
+
+    func testUnexpectedStatusesAndServerErrorsCannotMasqueradeAsAdmission() async throws {
+        StubEdge.requestReply = .init(code: 202, body: #"{"status":"pending"}"#)
+        let malformed = await EdgeClient.join(StubEdge.server, uid: "30:ed:a0:00:00:08", label: "Node 8", firmware: nil, timeout: 1)
+        guard case .failed = malformed else { return XCTFail("malformed request confirmation was accepted") }
+        StubEdge.requestReply = .init(code: 503, body: "{\"error\":\"\(StubEdge.server.token)\"}")
+        let log = LogBox()
+        _ = await EdgeClient.join(StubEdge.server, uid: "30:ed:a0:00:00:09", label: "Node 9", firmware: nil, timeout: 1) { log.add($0) }
+        XCTAssertFalse(log.all.joined().contains(StubEdge.server.token), "server error bodies must not echo credentials into logs")
     }
 }
