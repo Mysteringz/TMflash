@@ -45,20 +45,17 @@ struct Header: View {
     }
 }
 
-/// The app's mark: a heat blob seen from above, as the sensor sees a person.
+/// One flat shape stays legible in the header and at small Dock icon sizes.
 struct AppMark: View {
     var body: some View {
         GeometryReader { g in
             let d = min(g.size.width, g.size.height)
             ZStack {
                 RoundedRectangle(cornerRadius: d * 0.23, style: .continuous)
-                    .fill(LinearGradient(colors: [Color(red: 0.10, green: 0.12, blue: 0.30), Color(red: 0.22, green: 0.10, blue: 0.42)],
-                                         startPoint: .top, endPoint: .bottom))
-                Circle()
-                    .fill(RadialGradient(colors: [.white, .yellow, .orange, .red.opacity(0.0)], center: .center,
-                                         startRadius: 0, endRadius: d * 0.38))
-                    .frame(width: d * 0.72, height: d * 0.72)
-                Image(systemName: "bolt.fill").font(.system(size: d * 0.27, weight: .bold)).foregroundStyle(.black.opacity(0.7))
+                    .fill(Color(red: 0.12, green: 0.13, blue: 0.15))
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: d * 0.48, weight: .medium))
+                    .foregroundStyle(.white)
             }
             .frame(width: d, height: d)
         }
