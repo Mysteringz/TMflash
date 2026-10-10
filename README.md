@@ -2,8 +2,9 @@
 
 A Mac app for flashing **TMsense** thermal nodes (Heltec WiFi LoRa 32 V3 with
 an MLX90640) and setting them up in one click, in the style of Raspberry Pi
-Imager. Plug in a board, enter its node ID, scan and select its Wi-Fi network, and press
-**Flash**. TMflash then:
+Imager. Plug in a board and follow the guided setup: **connection mode → Wi-Fi
+destination → network settings → security & verification → speed & device ID →
+review & flash**. TMflash then:
 
 1. **builds** the TMsense firmware from source with PlatformIO (`pio run -e
    tmflash`),
@@ -17,18 +18,12 @@ Imager. Plug in a board, enter its node ID, scan and select its Wi-Fi network, a
 give a starting and an ending node ID, and the boards get consecutive IDs in
 the order they're listed.
 
-```
-┌ TMflash ────────────────────────────────────────────── [Single node | Batch] ────┐
-│ Device                │ NODE IDENTITY   Node ID [ 3 ]                             │
-│ (•) usbserial-0001    │ UPLINK          Mode  Wi-Fi (  ) LoRa                     │
-│     Silicon Labs CP210x│                 SSID [ExampleWiFi]  Password [••••]       │
-│     ✔ TMsense #3 · 02:00:00:… · tmsense-1.1                                       │
-│                       │                 TMWAccess IP [192.0.2.10]                 │
-│                       │ SECURITY        Signing key [••••]  ☑ remember in Keychain│
-│                       │ FIRMWARE        tmsense-1.1  /path/to/TMsense             │
-│                       │                                          [   Flash   ]    │
-└───────────────────────┴──────────────────────────────────────────────────────────┘
-```
+The sidebar keeps the setup steps and USB device selection visible. **Back** and
+**Continue** guide you through the fields; you can also revisit a step directly.
+The final review lists your choices with **Edit** links. Passwords and signing
+keys are never displayed in that summary. Only settings for the selected
+connection are validated or written; a direct Wi-Fi setup leaves the saved
+local gateway untouched.
 
 Network names, addresses, device IDs and paths shown here are examples. Replace
 them with your site's values; `192.0.2.10` is a documentation-only address.
@@ -63,26 +58,32 @@ also installed, the same board appears a second time as
 
 **Single node**
 
-1. Plug in the board. It appears under **Device** and TMflash asks it what it
-   runs (e.g. *TMsense #3 · 02:00:00:00:00:03 · tmsense-1.1*). Opening a
-   serial port restarts an ESP32, so identifying a board restarts it.
-2. Enter the **Node ID** (1–65535). Write the same number on the enclosure.
-3. Choose **Wi-Fi** or **LoRa**:
-   - Wi-Fi: press **Scan**, choose a nearby **2.4 GHz** SSID from the menu,
-     then enter the password. For **Local gateway**, enter the **TMWAccess IP**:
-     the gateway's LAN address, replacing the example `192.0.2.10` with your
-     site's address. For **Direct to cloud**, enter the **TMedge node URL**.
-   - LoRa: the **TMLAccess IP**. *The firmware has no LoRa uplink yet.* A
-     node in LoRa mode stores the setting and says so on its console, but it
-     sends nothing until LoRa support ships. TMflash warns about this.
-4. Under **Sensor**, choose **1 fps**, **2 fps** or **4 fps**, or leave
-   **Keep current** selected. These are visible buttons in a segmented selector.
-   A fresh node defaults to 1 fps. Changing
-   the rate requires TMsense 1.6 or newer; flashing the current firmware adds
-   support. The choice applies to every selected board in batch mode and is
-   checked against the node's saved settings.
-5. Enter the **signing key**: TMedge's `TM_KEY`, the same on every node.
-6. Press **Flash**.
+1. Plug in the board. TMflash reads its firmware, device ID and physical UID
+   without resetting it. Select it under **Device**.
+2. **Connection mode:** choose **Wi-Fi** or **LoRa**. LoRa currently stores
+   settings only: the firmware cannot transmit readings in this mode.
+3. **Wi-Fi destination:** choose **Wi-Fi directly to TMedge** or **Wi-Fi through
+   a gateway**. Both use your site's Wi-Fi. Direct means connecting to the
+   cloud server; it does not create a device hotspot. LoRa skips this step.
+4. **Network settings:** scan for a **2.4 GHz** Wi-Fi network or enter its SSID
+   manually, then enter the password. Direct Wi-Fi needs the **TMedge device
+   endpoint** (`wss://…/tmnode`); gateway Wi-Fi needs the **TMWAccess gateway IP**.
+   LoRa shows only its **TMLAccess gateway IP**. Blank fields keep saved values;
+   enter the network and destination for a new device.
+5. **Security & verification:** enter the **telemetry signing key** matching
+   TMedge's device configuration, or keep the saved key. For a new device,
+   enable **Adopt a new device with my algo account** and sign in. Existing
+   approved devices can keep their server approval. The account sign-in
+   authorizes adoption; the signing key authenticates device telemetry.
+6. **Speed & device ID:** choose **1 fps**, **2 fps** or **4 fps**, or **Keep
+   current**, then enter the **Device ID** (1–65535). The physical UID is
+   unchanged. A new device defaults to 1 fps; changing the rate requires
+   TMsense 1.6 or later and is checked against its saved settings.
+7. **Review & flash:** check the summary and choose **Firmware + settings**
+   or **Settings only**. The firmware folder is shown only when writing
+   firmware. Resolve any displayed problems, then press **Flash** or
+   **Configure**. The pipeline verifies account access before device writes,
+   checks USB readback, and waits for a fresh server ACK for direct Wi-Fi.
 
 Scanning uses this Mac's Wi-Fi adapter, so the board does not need firmware
 installed yet. Run the built **TMflash.app** and allow its Location Services
@@ -109,13 +110,13 @@ mode they apply to every selected board.
 
 **TMedge admission**
 
-Enable **Adopt each node after flashing** for a new board. Set the console URL
-to `https://algo.hkumyseat.com`, then click **Sign in with algo account**.
+In **Security & verification**, enable **Adopt a new device with my algo account** for a new board. Set the console URL
+to `https://algo.hkumyseat.com`, then click **Sign in with algo**.
 Complete the existing browser sign-in and authorize TMflash. No service token
 or copied provisioning token is needed. Your password stays in the browser;
 an expiring 24-hour session stays in the Mac's Keychain.
 
-**Test** checks account access and persistent registration storage. This same
+**Check access** checks account access and persistent registration storage. This same
 check must pass before any USB write or firmware flashing. A sign-in page,
 redirect, refusal or malformed response fails the job. HTTPS is required
 except for loopback fixtures or SSH tunnels.
@@ -170,7 +171,7 @@ to register new nodes. **Show manifest** opens it.
 
 - **Blank fields keep what the node already has.** Re-flashing firmware
   doesn't make you re-type a password.
-- **Write firmware** off: TMflash only updates the settings on a board that
+- **Settings only**: TMflash only updates the settings on a board that
   already runs TMsense 1.1 or newer.
 - The Wi-Fi password and key can be remembered in the login **Keychain**.
   Nothing secret is written to disk, shown in the log or put in the
