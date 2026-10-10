@@ -11,8 +11,8 @@ enum Snapshot {
         app.setActivationPolicy(.prohibited)
         let model: AppModel
         if scene == "live" {
-            // The real model: real USB detection and identification (which
-            // restarts the boards). Settings from a scratch defaults suite.
+            // Read-only USB detection and identification, without resetting
+            // the board. Settings come from a scratch defaults suite.
             model = AppModel(live: true, defaults: UserDefaults(suiteName: "TMflash.snapshot.live") ?? .standard)
             let until = Date().addingTimeInterval(8)
             while Date() < until && (model.devices.isEmpty || model.probes.values.contains(.checking)) {
@@ -24,9 +24,7 @@ enum Snapshot {
         }
 
         let view = NSHostingView(rootView: ContentView().environmentObject(model))
-        // A taller window for scenes whose form runs past the usual height,
-        // so a snapshot shows the whole of it rather than a cropped hint.
-        let size = NSSize(width: 900, height: ["tall", "account-login"].contains(scene) ? 1350 : 800)
+        let size = scene.hasSuffix("-compact") ? NSSize(width: 860, height: 640) : NSSize(width: 900, height: 800)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = view
@@ -38,23 +36,24 @@ enum Snapshot {
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
     }
 
-    static func populate(_ m: AppModel, scene: String) {
+    static func populate(_ m: AppModel, scene rawScene: String) {
+        let scene = rawScene.replacingOccurrences(of: "-compact", with: "")
         let boards = (1...(scene == "batch-large" ? 16 : 4)).map {
             SerialDevice(path: "/dev/cu.usbserial-000\(String($0))", vendorID: 0x10C4, productID: 0xEA60, product: "CP2102 USB to UART Bridge Controller",
                          serialNumber: "000\(String($0))", locationID: $0)
         }
         m.projectDir = NSHomeDirectory() + "/Desktop/IOT/TMsense"
-        m.firmwareVersion = "tmsense-1.1"
+        m.firmwareVersion = "tmsense-1.6"
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
         m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
         m.wifi.state = .ready
         if scene == "fps1" { m.settings.frameRate = .fps1 }
         if scene == "fps2" { m.settings.frameRate = .fps2 }
         if scene == "fps4" { m.settings.frameRate = .fps4 }
-        if scene == "tall" || scene == "account-login" {
+        if scene == "tall" || scene == "account-login" || scene == "security" || scene == "security-signed-in" || scene == "review" {
             m.registerWithEdge = true
             m.edgeURL = "https://algo.hkumyseat.com"
-            if scene == "tall" {
+            if scene == "tall" || scene == "security-signed-in" || scene == "review" {
                 m.edgeSession = FlasherSession(id: "preview", token: "tmflash_" + String(repeating: "a", count: 64), user: "bench", expiresAt: Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000), url: m.edgeURL)
                 m.edgeCheck = "Connected. Console access is verified. Adoption is ready."
             }
@@ -66,11 +65,11 @@ enum Snapshot {
         if scene == "wifi-scanning" { m.wifi.networks = []; m.wifi.state = .scanning }
         if scene == "wifi-empty" { m.wifi.networks = [] }
         if scene == "wifi-denied" { m.wifi.updateAuthorization(.denied) }
-        let info = NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.1", "node_id": "3", "mode": "wifi"])
+        let info = NodeInfo(fields: ["uid": "30:ed:a0:cb:f5:f8", "fw": "tmsense-1.6", "node_id": "3", "mode": "wifi", "caps": "wss1,fps1"])
         switch scene {
         case "empty":
             m.devices = []
-        case "batch", "batch-large":
+        case "batch", "batch-large", "batch-review":
             m.mode = .batch
             m.devices = boards
             m.batchPorts = Set(boards.prefix(3).map(\.path))
@@ -87,7 +86,7 @@ enum Snapshot {
             m.nodeIDText = "4"
             m.settings = NodeSettings(mode: .lora, gateway: "192.168.0.60", key: "k")
             m.probes = [boards[0].path: .tmsense(info)]
-        case "cloud":
+        case "cloud", "cloud-review":
             m.devices = [boards[0]]
             m.selectedPort = boards[0].path
             m.nodeIDText = "3"
@@ -134,6 +133,14 @@ enum Snapshot {
             m.selectedPort = boards[0].path
             m.nodeIDText = "3"
             m.probes = [boards[0].path: .tmsense(info)]
+        }
+        switch scene {
+        case "route": m.setupStep = .route
+        case "network", "cloud", "hotspot", "wifi-scanning", "wifi-empty", "wifi-denied": m.setupStep = .network
+        case "security", "security-signed-in", "tall", "account-login": m.setupStep = .security
+        case "device", "fps1", "fps2", "fps4", "batch", "batch-large": m.setupStep = .device
+        case "review", "cloud-review", "batch-review": m.setupStep = .review
+        default: break
         }
     }
 }

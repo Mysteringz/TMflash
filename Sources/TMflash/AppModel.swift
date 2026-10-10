@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     @Published var probes: [String: ProbeState] = [:]
 
     // Setup
+    @Published var setupStep: SetupStep = .connection
     @Published var mode: Mode = .single { didSet { defaults.set(mode.rawValue, forKey: "mode") } }
     @Published var selectedPort: String?
     @Published var batchPorts: Set<String> = []
@@ -82,6 +83,7 @@ final class AppModel: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var pollTimer: Timer?
     private let live: Bool
+    private var previousWiFiTransport: UplinkTransport = .udp
 
     /// `live: false` builds a model for previews/snapshots: no Keychain, no
     /// timers, no hardware.
@@ -114,6 +116,7 @@ final class AppModel: ObservableObject {
             edgeSession = try? JSONDecoder().decode(FlasherSession.self, from: stored)
         }
         settings = s
+        previousWiFiTransport = UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp
         let hint = Bundle.main.object(forInfoDictionaryKey: "TMSenseDir") as? String
         projectDir = defaults.string(forKey: "projectDir").flatMap { FirmwareProject.isProject($0) ? $0 : nil }
             ?? FirmwareProject.defaultDirectory(bundleHint: hint)
@@ -132,7 +135,9 @@ final class AppModel: ObservableObject {
         defaults.set(settings.mode.rawValue, forKey: "uplink")
         defaults.set(settings.ssid, forKey: "ssid")
         defaults.set(settings.gateway, forKey: settings.mode == .wifi ? "wifiGateway" : "loraGateway")
-        defaults.set(settings.transport.rawValue, forKey: "transport")
+        // LoRa forces UDP internally but must not erase the Wi-Fi route to
+        // restore when the person switches back, even after reopening the app.
+        if settings.mode == .wifi { defaults.set(settings.transport.rawValue, forKey: "transport") }
         defaults.set(settings.cloudURL, forKey: "cloudURL")
         if let fps = settings.frameRate { defaults.set(fps.rawValue, forKey: "frameRate") }
         else { defaults.removeObject(forKey: "frameRate") }
@@ -205,12 +210,72 @@ final class AppModel: ObservableObject {
     /// Switching uplink swaps the gateway field to the address remembered for that mode.
     func setUplink(_ m: UplinkMode) {
         guard m != settings.mode else { return }
+        if settings.mode == .wifi { previousWiFiTransport = settings.transport }
         var s = settings
         s.mode = m
         s.gateway = defaults.string(forKey: m == .wifi ? "wifiGateway" : "loraGateway") ?? ""
         // LoRa has no direct-cloud transport; coming back to Wi-Fi restores the choice.
-        s.transport = m == .lora ? .udp : UplinkTransport(rawValue: defaults.string(forKey: "transport") ?? "") ?? .udp
+        s.transport = m == .lora ? .udp : previousWiFiTransport
         settings = s
+        if !setupSteps.contains(setupStep) { setupStep = .network }
+    }
+
+    var setupSteps: [SetupStep] {
+        SetupStep.allCases.filter { $0 != .route || settings.mode == .wifi }
+    }
+
+    func moveSetup(by offset: Int) {
+        guard let index = setupSteps.firstIndex(of: setupStep),
+              setupSteps.indices.contains(index + offset) else { return }
+        setupStep = setupSteps[index + offset]
+    }
+
+    /// Remember both routes for editing, but never validate or write a hidden
+    /// route's settings. Switching to direct cloud must not rewrite a gateway.
+    var settingsForRun: NodeSettings {
+        var s = settings
+        if s.mode == .lora {
+            s.ssid = ""
+            s.password = ""
+            s.cloudURL = ""
+            s.transport = .udp
+        } else if s.transport == .wss {
+            s.gateway = ""
+        } else {
+            s.cloudURL = ""
+        }
+        return s
+    }
+
+    var adoptionProblems: [String] {
+        guard registerWithEdge else { return [] }
+        guard let session = edgeSession, AccountClient.matches(session, url: edgeURL) else {
+            return ["Sign in with your algo account for this console before adopting a device"]
+        }
+        return configuredEdgeServer.problems()
+    }
+
+    var deviceProblems: [String] {
+        if case .failure(let e) = plan { return [e.message] }
+        if case .success(let jobs) = plan, jobs.contains(where: { probes[$0.port] == .checking }) {
+            return ["Identifying the board…"]
+        }
+        return []
+    }
+
+    /// Earlier steps only check fields the person can edit there. Full
+    /// validation still runs at review and again before the pipeline starts.
+    var setupProblems: [String] {
+        switch setupStep {
+        case .connection, .route: return []
+        case .network:
+            var s = settingsForRun
+            s.key = ""
+            return s.problems()
+        case .security: return NodeSettings(key: settings.key).problems() + adoptionProblems
+        case .device: return deviceProblems
+        case .review: return blockers
+        }
     }
 
     func refreshFirmwareVersion() {
@@ -295,17 +360,8 @@ final class AppModel: ObservableObject {
 
     /// Everything stopping the Flash button, first one shown.
     var blockers: [String] {
-        var out: [String] = []
-        if case .failure(let e) = plan { out.append(e.message) }
         // Identifying holds the port open; flashing now would find it busy.
-        if case .success(let jobs) = plan, jobs.contains(where: { probes[$0.port] == .checking }) {
-            out.append("Identifying the board…")
-        }
-        out += settings.problems()
-        if registerWithEdge {
-            if let session = edgeSession, AccountClient.matches(session, url: edgeURL) { out += configuredEdgeServer.problems() }
-            else { out.append("Sign in with your algo account for this console before adopting a device") }
-        }
+        var out = deviceProblems + settingsForRun.problems() + adoptionProblems
         if flashFirmware {
             if toolchain == nil { out.append("PlatformIO is not installed (brew install platformio)") }
             if projectDir == nil { out.append("Choose the TMsense firmware folder") }
@@ -329,10 +385,13 @@ final class AppModel: ObservableObject {
         rows = jobs.map { Row(port: $0.port, nodeID: $0.nodeID) }
         buildLog = []
         buildError = nil
-        let settings = self.settings
+        let settings = settingsForRun
         let flash = flashFirmware
         let dir = projectDir
         let tc = toolchain
+        // A session expiring during a firmware build must fail preflight,
+        // rather than turn an opted-in adoption into a local-only setup.
+        let options = PipelineOptions(server: edgeServer)
         phase = flash ? .building : .flashing
         runTask = Task {
             var writer: FirmwareWriter?
@@ -351,7 +410,6 @@ final class AppModel: ObservableObject {
             }
             if Task.isCancelled { phase = .finished; return }
             phase = .flashing
-            let options = PipelineOptions(server: edgeServer)
             let results = await Pipeline.run(jobs: jobs, settings: settings, writer: writer, options: options) { e in
                 // Main-queue hops keep events in order.
                 DispatchQueue.main.async { self.apply(e) }
