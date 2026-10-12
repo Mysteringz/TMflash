@@ -135,12 +135,6 @@ public final class NodeConsole {
         throw SerialError("no answer to `\(c.display)` within \(Int(timeout)) s")
     }
 
-    /// Reboots and waits for the Wi-Fi join line. Returns the node's IP, or
-    /// nil if it did not join within `timeout` (wrong password, out of range).
-    public func rebootAndWaitForWiFi(timeout: TimeInterval) throws -> String? {
-        try rebootAndWatch(wifiTimeout: timeout, cloudTimeout: 0).ip
-    }
-
     public struct BootWatch: Equatable, Sendable {
         /// Joined Wi-Fi as this address; nil if it did not.
         public var ip: String?
