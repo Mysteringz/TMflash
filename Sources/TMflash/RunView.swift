@@ -60,10 +60,10 @@ private struct Summary: View {
 
     private var title: String {
         switch model.phase {
-        case .building: return "Building firmware…"
+        case .building: return model.bundledFirmware != nil ? "Checking included firmware…" : "Building firmware…"
         case .flashing: return model.rows.count == 1 ? "Setting up node #\(model.rows[0].nodeID)…" : "Setting up \(model.rows.count) nodes…"
         case .finished:
-            if model.buildError != nil { return "Firmware build failed" }
+            if model.buildError != nil { return "Firmware preparation failed" }
             // A direct-cloud node TMedge has not heard from is set up, not ready:
             // it is delivering no occupancy, and the headline must not say otherwise.
             let unheard = model.rows.filter { $0.result?.edgeAccepted == false }.count

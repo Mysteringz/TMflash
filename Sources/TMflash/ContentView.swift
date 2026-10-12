@@ -456,16 +456,25 @@ struct SettingsForm: View {
                     Text("Settings only").tag(false)
                 }.pickerStyle(.segmented).labelsHidden()
                 if model.flashFirmware {
-                    HStack {
-                        Text(model.firmwareVersion ?? "No firmware source selected").font(.callout.monospaced())
-                        Spacer()
-                        Button("Choose firmware folder…") { model.chooseProject() }
-                    }
-                    if let path = model.projectDir {
-                        DisclosureGroup("Firmware source location") {
-                            Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    if let release = model.bundledFirmware {
+                        Text(release.version).font(.callout.monospaced())
+                        Text("Included with TMflash. Ready to flash without downloads.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup("Firmware release") {
+                            Text("\(release.tag) · \(release.commit)").font(.caption.monospaced()).textSelection(.enabled)
                         }.font(.caption)
+                    } else {
+                        HStack {
+                            Text(model.firmwareVersion ?? "No firmware source selected").font(.callout.monospaced())
+                            Spacer()
+                            Button("Choose firmware folder…") { model.chooseProject() }
+                        }
+                        if let path = model.projectDir {
+                            DisclosureGroup("Firmware source location") {
+                                Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }.font(.caption)
+                        }
                     }
                 } else {
                     Text("Update a device that already runs TMsense. Unsupported commands are refused before settings are written.")
@@ -635,7 +644,7 @@ struct FlashBar: View {
         return model.mode == .single ? verb : "\(verb) \(count) node\(count == 1 ? "" : "s")"
     }
     private var readyText: String {
-        model.flashFirmware ? "Builds the firmware, writes it, then sets up and checks each node"
+        model.flashFirmware ? (model.bundledFirmware != nil ? "Writes the included firmware, then sets up and checks each node" : "Builds the firmware, writes it, then sets up and checks each node")
                             : "Writes the settings and checks each node"
     }
 }

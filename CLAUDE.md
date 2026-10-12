@@ -11,6 +11,8 @@ Sources/TMflashCore/NodeConsole.swift    TMsense serial console: show parsing, r
 Sources/TMflashCore/SerialPort.swift     POSIX termios port
 Sources/TMflashCore/SerialDevices.swift  IOKit USB serial discovery, dedupe by USB location
 Sources/TMflashCore/Toolchain.swift      pio build + metadata -> flash images; esptool args
+Sources/TMflashCore/PortableFirmware.swift checked bundled GitHub release and partition layout
+scripts/release_manifest.py              public DMG contract read by TMedge's download page
 Sources/TMflashCore/Flasher.swift        esptool run + progress parsing
 Sources/TMflashCore/Pipeline.swift       per-board flash -> provision -> verify, in parallel
 Sources/TMflashCore/Records.swift        manifest CSV, Keychain, probe
@@ -25,12 +27,22 @@ Tests/TMflashCoreTests/FakeNode.swift    fake TMsense console on a pty
 swift test
 swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch [--dark]
 scripts/build-app.sh [install]
+python3 scripts/build-dmg.py             # self-contained Intel + Apple Silicon DMG
 ```
 
 ## Invariants
 
 - **Never erase flash.** NVS holds the node's settings and its boot counter;
   a reset boot counter makes TMedge reject the node's packets as replays.
+- **Portable builds use their included release and tools.** A damaged bundle
+  fails before USB writes; it never falls back to a developer's source tree.
+  Packaging uses the latest published TMsense GitHub release, checks its
+  manifest, and pins the standalone esptool archives. Firmware, boot selector
+  and partition layout checks must preserve NVS and all other data partitions.
+- **Published app builds are immutable and identify clean source.** The
+  master release workflow publishes the DMG and `tmflash-app.json` together.
+  TMedge checks that manifest before hosting the file; change writer and
+  reader together. An older master run cannot replace a newer latest build.
 - **Never log, store or pass secrets on a command line.** Password and key go
   only to the node's serial port and the Keychain; the CLI takes them from env.
 - **The console protocol is TMsense's** (`src/tm_settings.cpp`): `show` field

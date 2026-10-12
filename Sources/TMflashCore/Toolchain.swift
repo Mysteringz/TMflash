@@ -5,11 +5,13 @@ public struct Toolchain: Sendable {
     public let pio: String
     public let python: String
     public let esptool: String
+    public let standalone: Bool
 
-    public init(pio: String, python: String, esptool: String) {
+    public init(pio: String, python: String, esptool: String, standalone: Bool = false) {
         self.pio = pio
         self.python = python
         self.esptool = esptool
+        self.standalone = standalone
     }
 
     public static var platformioHome: String {
@@ -18,8 +20,18 @@ public struct Toolchain: Sendable {
 
     /// Finds PlatformIO. esptool is installed by the first ESP32 build, so it
     /// may legitimately be missing until then.
-    public static func locate() -> Toolchain? {
+    public static func locate(resources: URL? = AppResources.directory) -> Toolchain? {
         let fm = FileManager.default
+        if let resources, fm.fileExists(atPath: resources.appendingPathComponent("Firmware").path) {
+            #if arch(arm64)
+            let arch = "arm64"
+            #else
+            let arch = "x86_64"
+            #endif
+            let executable = resources.appendingPathComponent("Tools/esptool-\(arch)/esptool").path
+            guard fm.isExecutableFile(atPath: executable) else { return nil }
+            return Toolchain(pio: "", python: "", esptool: executable, standalone: true)
+        }
         let home = platformioHome
         let candidates = [home + "/penv/bin/pio", "/opt/homebrew/bin/pio", "/usr/local/bin/pio"]
         guard let pio = candidates.first(where: { fm.isExecutableFile(atPath: $0) }) else { return nil }
@@ -29,6 +41,11 @@ public struct Toolchain: Sendable {
     }
 
     public var hasEsptool: Bool { FileManager.default.fileExists(atPath: esptool) }
+
+    public func flashCommand(_ build: FirmwareBuild, port: String) -> (executable: String, arguments: [String]) {
+        let args = build.esptoolArguments(port: port)
+        return standalone ? (esptool, args) : (python, [esptool] + args)
+    }
 }
 
 public struct FlashImage: Equatable, Sendable {

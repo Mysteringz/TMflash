@@ -1,18 +1,31 @@
 #!/bin/sh
-# Builds TMflash.app (release, this Mac's architecture) into build/.
+# Builds TMflash.app (release) into build/.
 #   scripts/build-app.sh            build
 #   scripts/build-app.sh install    build and copy to /Applications
+#   scripts/build-app.sh universal  build for Apple silicon and Intel
 # The app finds the TMsense firmware at the path recorded here (the sibling
 # ../TMsense), or wherever you point it with "Change…".
 set -eu
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 TMSENSE=$(cd "$ROOT/../TMsense" 2>/dev/null && pwd || true)
-VERSION=1.4.0
+VERSION=1.5.0
 
-swift build -c release --product TMflash
-swift build -c release --product tmflash-cli
-BIN=$(swift build -c release --show-bin-path)
+case "${1:-}" in
+  ""|install) set -- "${1:-}" ;;
+  universal) ;;
+  *) echo "usage: $0 [install|universal]" >&2; exit 2 ;;
+esac
+MODE=${1:-}
+if [ "$MODE" = "universal" ]; then
+  swift build -c release --arch arm64 --arch x86_64 --product TMflash
+  swift build -c release --arch arm64 --arch x86_64 --product tmflash-cli
+  BIN=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
+else
+  swift build -c release --product TMflash
+  swift build -c release --product tmflash-cli
+  BIN=$(swift build -c release --show-bin-path)
+fi
 
 APP="$ROOT/build/TMflash.app"
 rm -rf "$APP"
@@ -61,7 +74,7 @@ xattr -cr "$APP"
 codesign --force --deep --sign - "$APP"
 echo "built $APP"
 
-if [ "${1:-}" = "install" ]; then
+if [ "$MODE" = "install" ]; then
   rm -rf /Applications/TMflash.app
   cp -R "$APP" /Applications/TMflash.app
   echo "installed /Applications/TMflash.app"

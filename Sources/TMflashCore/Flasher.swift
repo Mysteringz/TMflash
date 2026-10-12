@@ -50,7 +50,8 @@ public enum Flasher {
         guard toolchain.hasEsptool else { throw SerialError("esptool not found at \(toolchain.esptool); build the firmware once first") }
         let sizes = build.images.map { (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int) ?? 0 }
         let state = ProgressBox(EsptoolProgress(imageSizes: sizes))
-        let status = try await ProcessRunner.run(toolchain.python, [toolchain.esptool] + build.esptoolArguments(port: port)) { line in
+        let command = toolchain.flashCommand(build, port: port)
+        let status = try await ProcessRunner.run(command.executable, command.arguments) { line in
             let changed = state.update { $0.feed(line) }
             if changed { progress(state.value.overall) }
             if !line.hasPrefix("Writing at ") { log(line) }

@@ -8,6 +8,7 @@ import TMflashCore
 let usage = """
 usage:
   tmflash-cli ports [--probe]                 list USB serial boards (--probe: ask each what it runs)
+  tmflash-cli firmware                        check and describe the firmware included in the app
   tmflash-cli build [--project DIR]           build the TMsense release image
   tmflash-cli flash --port P --id N [options] flash + provision one node
   tmflash-cli batch --ports P1,P2,... --start N --end M [options]
@@ -104,9 +105,14 @@ final class MacBox: @unchecked Sendable {
 @MainActor func writer() async -> FirmwareWriter? {
     if flags.contains("--no-flash") { return nil }
     if let cmd = opts["--esptool"] { return CommandWriter(command: cmd.split(separator: " ").map(String.init)) }
-    guard let tc = Toolchain.locate() else { fail("PlatformIO not found (brew install platformio)") }
     do {
-        let build = try await FirmwareProject.build(dir: project(), toolchain: tc) { say("  \($0)") }
+        let included = opts["--project"] == nil ? try PortableFirmware.load() : nil
+        guard let tc = Toolchain.locate(resources: included == nil ? nil : AppResources.directory) else {
+            fail(included == nil ? "PlatformIO not found (brew install platformio)" : "The included flashing tool is missing; reinstall TMflash")
+        }
+        let build: FirmwareBuild
+        if let included { build = included.build }
+        else { build = try await FirmwareProject.build(dir: project(), toolchain: tc) { say("  \($0)") } }
         say("firmware \(build.version ?? "?"): " + build.images.map { "\($0.offset) \(($0.path as NSString).lastPathComponent)" }.joined(separator: ", "))
         return EsptoolWriter(build: build, toolchain: tc)
     } catch { fail("\(error)") }
@@ -182,10 +188,18 @@ case "ports":
         say(line)
     }
 case "build":
-    guard let tc = Toolchain.locate() else { fail("PlatformIO not found (brew install platformio)") }
+    guard let tc = Toolchain.locate(resources: nil) else { fail("PlatformIO not found (brew install platformio)") }
     do {
         let b = try await FirmwareProject.build(dir: project(), toolchain: tc) { say($0) }
         say("built \(b.version ?? "?"); esptool \(b.esptoolArguments(port: "<port>").joined(separator: " "))")
+    } catch { fail("\(error)") }
+case "firmware":
+    do {
+        guard let release = try PortableFirmware.load() else { fail("this build does not include firmware") }
+        guard let toolchain = Toolchain.locate(), toolchain.standalone else { fail("the included flashing tool is missing") }
+        say("\(release.version) · \(release.tag) · \(release.commit)")
+        say("SHA-256 checks passed; bundled esptool is available.")
+        for image in release.build.images { say("\(image.offset) \((image.path as NSString).lastPathComponent)") }
     } catch { fail("\(error)") }
 case "flash":
     guard let port = opts["--port"], let id = opts["--id"].flatMap(Int.init) else { fail("flash needs --port and --id") }
