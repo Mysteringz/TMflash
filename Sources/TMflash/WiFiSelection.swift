@@ -61,7 +61,7 @@ struct WiFiSelection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(width: 260, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { discovery.scanIfAuthorized() }
     }
 }

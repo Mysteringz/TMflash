@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 TMSENSE=$(cd "$ROOT/../TMsense" 2>/dev/null && pwd || true)
-VERSION=1.3.0
+VERSION=1.4.0
 
 swift build -c release --product TMflash
 swift build -c release --product tmflash-cli
