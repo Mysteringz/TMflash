@@ -1,0 +1,66 @@
+name: Publish portable DMG
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tmflash-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-14
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test the app and release manifest
+        run: |
+          swift test
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Build and verify the self-contained universal DMG
+        run: python3 scripts/build-dmg.py
+      - name: Publish the current tested master build
+        shell: bash
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq .sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo 'Master advanced while this build ran; the newer build will publish.'
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib
+          manifest = json.loads(pathlib.Path('build/tmflash-app.json').read_text())
+          assert manifest['commit'] == os.environ['GITHUB_SHA'] and not manifest['sourceModified']
+          note = pathlib.Path(os.environ['RUNNER_TEMP']) / 'tmflash-release-notes.md'
+          note.write_text('Self-contained TMflash ' + manifest['version'] + ' for Intel and Apple Silicon, macOS ' + manifest['minimumMacOS'] + '+.\n\n'
+                          'Includes ' + manifest['firmware'] + ' and native flashing tools. Drag the app into Applications.\n\n'
+                          'This build is ad-hoc signed and is not notarized. Installation instructions are inside the DMG.\n\n'
+                          'TMedge checks tmflash-app.json and hosts the verified latest DMG automatically.\n')
+          with pathlib.Path(os.environ['GITHUB_ENV']).open('a') as env:
+              env.write('TMFLASH_TAG=' + manifest['tag'] + '\nTMFLASH_VERSION=' + manifest['version'] + '\nTMFLASH_FILE=' + manifest['filename'] + '\n')
+          PY
+      - name: Attach the immutable DMG, checksum and portal manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TMFLASH_TAG:-}" ]; then exit 0; fi
+          if gh release view "$TMFLASH_TAG" >/dev/null 2>&1; then
+            echo 'This commit already has a release; leaving it unchanged.'
+            exit 0
+          fi
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq .sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then exit 0; fi
+          gh release create "$TMFLASH_TAG" \
+            "build/$TMFLASH_FILE" "build/$TMFLASH_FILE.sha256" build/tmflash-app.json \
+            --target "$GITHUB_SHA" --latest \
+            --title "TMflash $TMFLASH_VERSION (${GITHUB_SHA:0:7})" \
+            --notes-file "$RUNNER_TEMP/tmflash-release-notes.md"

@@ -78,6 +78,9 @@ final class AppModel: ObservableObject {
     @Published var firmwareVersion: String?
 
     let toolchain: Toolchain?
+    let bundledFirmware: PortableFirmware?
+    let bundledFirmwareProblem: String?
+    private let resources: URL?
     let wifi: WiFiDiscovery
     private let defaults: UserDefaults
     private var runTask: Task<Void, Never>?
@@ -87,11 +90,19 @@ final class AppModel: ObservableObject {
 
     /// `live: false` builds a model for previews/snapshots: no Keychain, no
     /// timers, no hardware.
-    init(live: Bool = true, defaults: UserDefaults = .standard) {
+    init(live: Bool = true, defaults: UserDefaults = .standard, resources: URL? = AppResources.directory) {
         self.live = live
         self.defaults = defaults
+        self.resources = resources
         wifi = WiFiDiscovery(live: live)
-        toolchain = Toolchain.locate()
+        toolchain = Toolchain.locate(resources: resources)
+        do {
+            bundledFirmware = try PortableFirmware.load(resources: resources)
+            bundledFirmwareProblem = nil
+        } catch {
+            bundledFirmware = nil
+            bundledFirmwareProblem = String(describing: error)
+        }
         guard live else { return }
         mode = Mode(persistedValue: defaults.string(forKey: "mode"))
         nodeIDText = defaults.string(forKey: "nodeID") ?? ""
@@ -279,7 +290,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshFirmwareVersion() {
-        firmwareVersion = projectDir.flatMap(FirmwareProject.version(in:))
+        firmwareVersion = bundledFirmware?.version ?? projectDir.flatMap(FirmwareProject.version(in:))
     }
 
     func chooseProject() {
@@ -363,8 +374,13 @@ final class AppModel: ObservableObject {
         // Identifying holds the port open; flashing now would find it busy.
         var out = deviceProblems + settingsForRun.problems() + adoptionProblems
         if flashFirmware {
-            if toolchain == nil { out.append("PlatformIO is not installed (brew install platformio)") }
-            if projectDir == nil { out.append("Choose the TMsense firmware folder") }
+            if let problem = bundledFirmwareProblem { out.append(problem) }
+            else if bundledFirmware != nil {
+                if toolchain == nil { out.append("The included flashing tool is missing. Reinstall TMflash.") }
+            } else {
+                if toolchain == nil { out.append("PlatformIO is not installed (brew install platformio)") }
+                if projectDir == nil { out.append("Choose the TMsense firmware folder") }
+            }
         }
         return out
     }
@@ -395,10 +411,23 @@ final class AppModel: ObservableObject {
         phase = flash ? .building : .flashing
         runTask = Task {
             var writer: FirmwareWriter?
-            if flash, let dir, let tc {
+            if flash {
                 do {
-                    let build = try await FirmwareProject.build(dir: dir, toolchain: tc) { line in
-                        DispatchQueue.main.async { self.appendBuild(line) }
+                    guard let tc else { throw SerialError("The flashing tool is unavailable.") }
+                    let build: FirmwareBuild
+                    if bundledFirmware != nil {
+                        // Check again immediately before use: startup checks do
+                        // not vouch for bytes changed while the window was open.
+                        guard let release = try PortableFirmware.load(resources: resources) else {
+                            throw SerialError("The included firmware is missing. Reinstall TMflash.")
+                        }
+                        build = release.build
+                        appendBuild("Included \(release.version) (\(release.tag)); all firmware hashes verified.")
+                    } else {
+                        guard let dir else { throw SerialError("Choose the TMsense firmware folder.") }
+                        build = try await FirmwareProject.build(dir: dir, toolchain: tc) { line in
+                            DispatchQueue.main.async { self.appendBuild(line) }
+                        }
                     }
                     firmwareVersion = build.version
                     writer = EsptoolWriter(build: build, toolchain: tc)

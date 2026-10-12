@@ -19,5 +19,11 @@ jobs:
           persist-credentials: false
       - name: Test against fake serial nodes
         run: swift test
+      - name: Check the public DMG manifest
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Build release executables
         run: swift build -c release
+      - name: Build and verify the portable universal DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/build-dmg.py

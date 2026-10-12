@@ -4,6 +4,26 @@ import XCTest
 
 final class ProvisioningSettingsTests: XCTestCase {
     @MainActor
+    func testDamagedBundledFirmwareCannotFallBackToADeveloperSourceFolder() throws {
+        let resources = FileManager.default.temporaryDirectory.appendingPathComponent("tmflash-damaged-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: resources.appendingPathComponent("Firmware"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: resources) }
+        let suite = "TMflash.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(live: false, defaults: defaults, resources: resources)
+        model.devices = [SerialDevice(path: "/dev/cu.test", vendorID: 0x10C4)]
+        model.selectedPort = "/dev/cu.test"
+        model.nodeIDText = "3"
+        model.projectDir = resources.path
+        XCTAssertNotNil(model.bundledFirmwareProblem)
+        XCTAssertTrue(model.blockers.contains { $0.contains("included firmware") })
+        XCTAssertFalse(model.blockers.contains { $0.contains("PlatformIO") })
+        model.flashFirmware = false
+        XCTAssertTrue(model.blockers.isEmpty, "settings-only still works without firmware")
+    }
+
+    @MainActor
     func testOptingIntoAdmissionCannotSilentlySkipMissingCredentials() throws {
         let suite = "TMflash.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

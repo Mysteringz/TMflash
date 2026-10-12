@@ -3,3 +3,4 @@ build/
 .swiftpm/
 .DS_Store
 *.xcodeproj
+__pycache__/
