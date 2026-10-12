@@ -1,281 +1,55 @@
 # TMflash
 
-A Mac app for flashing **TMsense** thermal nodes (Heltec WiFi LoRa 32 V3 with
-an MLX90640) and setting them up in one click, in the style of Raspberry Pi
-Imager. Plug in a board and follow the guided setup: **connection mode → Wi-Fi
-destination → network settings → security & verification → speed & device ID →
-review & flash**. TMflash then:
+TMflash is a macOS application and command-line tool for flashing and provisioning TMsense thermal nodes. It builds one release image, writes firmware to selected boards, saves per-node settings through USB serial, and checks the resulting configuration.
 
-1. **builds** the TMsense firmware from source with PlatformIO (`pio run -e
-   tmflash`),
-2. **writes** it with esptool,
-3. **sets the node up** over USB serial: node ID, Wi-Fi or LoRa mode, SSID,
-   password, gateway IP and signing key,
-4. **checks** it: reads the settings back and verifies them, then restarts
-   the node and waits until it joins the Wi-Fi.
+Single-node and batch workflows share the same core. Batch size follows the connected USB devices and host resources. Supported settings include local-gateway or direct-cloud transport, Wi-Fi credentials, node identity, and 1/2/4 fps selection. LoRa stores settings only; the firmware's LoRa uplink is not implemented.
 
-**Batch mode** does the same for all selected boards at once, in parallel. You
-give a starting and an ending node ID, and the boards get consecutive IDs in
-the order they're listed.
+The application guides setup through **connection mode → Wi-Fi destination → network settings → security & verification → speed & device ID → review & flash**. LoRa skips the Wi-Fi destination step. The sidebar keeps setup steps and USB selection visible; Back, Continue and review-page Edit links let users revisit their choices. The final step offers Firmware + settings or Settings only, and hides passwords and signing keys from the summary.
 
-The sidebar keeps the setup steps and USB device selection visible. **Back** and
-**Continue** guide you through the fields; you can also revisit a step directly.
-The final review lists your choices with **Edit** links. Passwords and signing
-keys are never displayed in that summary. Only settings for the selected
-connection are validated or written; a direct Wi-Fi setup leaves the saved
-local gateway untouched.
+## Interesting techniques
 
-Network names, addresses, device IDs and paths shown here are examples. Replace
-them with your site's values; `192.0.2.10` is a documentation-only address.
+- **Shared application and CLI logic.** [TMflashCore](Sources/TMflashCore/) owns device discovery, builds, flashing, provisioning, and verification. The graphical application and CLI provide separate interfaces to that core.
+- **Guided setup with scoped settings.** [Setup steps](Sources/TMflash/SetupStep.swift) and the [app model](Sources/TMflash/AppModel.swift) show and validate fields for the selected connection. Hidden route settings are retained for editing but excluded from device writes; direct Wi-Fi leaves the saved local gateway untouched.
+- **Concurrent, independent board jobs.** The [pipeline](Sources/TMflashCore/Pipeline.swift) uses Swift task groups. Blocking serial work runs on dispatch queues, and one failed board does not stop the remaining jobs.
+- **Firmware-derived flash layouts.** [Toolchain handling](Sources/TMflashCore/Toolchain.swift) reads PlatformIO metadata for image paths and offsets. Flashing preserves NVS settings and replay counters.
+- **One entry per physical USB board.** [Device discovery](Sources/TMflashCore/SerialDevices.swift) deduplicates serial ports by USB location when multiple drivers expose the same device.
+- **Capability checks before writes.** The [serial console adapter](Sources/TMflashCore/NodeConsole.swift) reads firmware capabilities before enabling direct-cloud transport or 1/2/4 fps selection. Unsupported requests fail before provisioning starts; omitting a rate keeps the node's current setting.
+- **Verification through readback.** Saved identity, transport, and network settings are checked against the firmware's response. Direct-cloud verification also waits for an edge-accepted report.
+- **Account-bound adoption.** [Account sign-in](Sources/TMflashCore/AccountLogin.swift) uses the browser and PKCE, with an expiring 24-hour session held in Keychain. When adopting a board, the [edge client](Sources/TMflashCore/EdgeClient.swift) checks account access before device writes. A person compares its physical UID and request code in the console before approving admission; direct-cloud success still requires a fresh report ACK from the rebooted board.
+- **Byte-aware Wi-Fi selection.** The [network scanner](Sources/TMflashCore/WiFiScanner.swift) preserves SSID identity by bytes, collapses duplicate access points, and prefers compatible 2.4 GHz networks.
+- **Separate secret and result storage.** [Record handling](Sources/TMflashCore/Records.swift) stores remembered credentials in the macOS Keychain and writes operational results to a CSV manifest without password or key fields.
+- **Hardware-free serial tests.** [Fake nodes](Tests/TMflashCoreTests/FakeNode.swift) speak the firmware console protocol over pseudo-terminals, allowing tests to exercise real serial communication.
 
-## Install
+## Technologies and libraries
 
-You need:
+- [SwiftUI](https://developer.apple.com/documentation/swiftui) provides the native interface.
+- [IOKit](https://developer.apple.com/documentation/iokit) discovers USB serial devices.
+- [CoreWLAN](https://developer.apple.com/documentation/corewlan) scans Wi-Fi networks. [Core Location](https://developer.apple.com/documentation/corelocation) handles the permission needed to reveal network names.
+- [Keychain Services](https://developer.apple.com/documentation/security/keychain-services) stores remembered secrets.
+- [PlatformIO](https://docs.platformio.org/en/latest/) builds firmware, and [esptool](https://docs.espressif.com/projects/esptool/en/latest/esp32/) writes it to ESP32 boards.
+- [Package.swift](Package.swift) defines the app, CLI, shared core, and test targets without third-party Swift package dependencies.
 
-- macOS 14 or later.
-- Xcode or the Command Line Tools, to build the app (`swift --version`).
-- PlatformIO: `brew install platformio`, or the VS Code extension, which
-  puts `pio` in `~/.platformio/penv/bin`. The first build downloads the
-  ESP32-S3 toolchain, about 1 GB.
-- The `TMsense` folder next to `TMflash` (`../TMsense`), or anywhere you
-  point the app to with **Change…**.
+The interface uses native system typography. Icons and preview images are rendered by the application; no external font or image pack is required.
 
-```sh
-scripts/build-app.sh            # → build/TMflash.app
-scripts/build-app.sh install    # …and copy it to /Applications
-open build/TMflash.app
+## Project structure
+
+```text
+TMflash/
+├── .github/workflows/
+├── Sources/
+│   ├── TMflash/
+│   ├── TMflashCore/
+│   └── tmflash-cli/
+├── Tests/
+│   ├── TMflashAppTests/
+│   └── TMflashCoreTests/
+├── scripts/
+├── Package.swift
+└── README.md
 ```
 
-The app is ad-hoc signed for this Mac. On another Mac, run the script there,
-or right-click → Open the first time.
-
-The Heltec V3's USB bridge is a CP2102. macOS 14+ has a driver built in and
-the board appears as `/dev/cu.usbserial-XXXX`. If Silicon Labs' own driver is
-also installed, the same board appears a second time as
-`cu.SLAB_USBtoUART`. TMflash shows it once.
-
-## Use
-
-**Single node**
-
-1. Plug in the board. TMflash reads its firmware, device ID and physical UID
-   without resetting it. Select it under **Device**.
-2. **Connection mode:** choose **Wi-Fi** or **LoRa**. LoRa currently stores
-   settings only: the firmware cannot transmit readings in this mode.
-3. **Wi-Fi destination:** choose **Wi-Fi directly to TMedge** or **Wi-Fi through
-   a gateway**. Both use your site's Wi-Fi. Direct means connecting to the
-   cloud server; it does not create a device hotspot. LoRa skips this step.
-4. **Network settings:** scan for a **2.4 GHz** Wi-Fi network or enter its SSID
-   manually, then enter the password. Direct Wi-Fi needs the **TMedge device
-   endpoint** (`wss://…/tmnode`); gateway Wi-Fi needs the **TMWAccess gateway IP**.
-   LoRa shows only its **TMLAccess gateway IP**. Blank fields keep saved values;
-   enter the network and destination for a new device.
-5. **Security & verification:** enter the **telemetry signing key** matching
-   TMedge's device configuration, or keep the saved key. For a new device,
-   enable **Adopt a new device with my algo account** and sign in. Existing
-   approved devices can keep their server approval. The account sign-in
-   authorizes adoption; the signing key authenticates device telemetry.
-6. **Speed & device ID:** choose **1 fps**, **2 fps** or **4 fps**, or **Keep
-   current**, then enter the **Device ID** (1–65535). The physical UID is
-   unchanged. A new device defaults to 1 fps; changing the rate requires
-   TMsense 1.6 or later and is checked against its saved settings.
-7. **Review & flash:** check the summary and choose **Firmware + settings**
-   or **Settings only**. The firmware folder is shown only when writing
-   firmware. Resolve any displayed problems, then press **Flash** or
-   **Configure**. The pipeline verifies account access before device writes,
-   checks USB readback, and waits for a fresh server ACK for direct Wi-Fi.
-
-Scanning uses this Mac's Wi-Fi adapter, so the board does not need firmware
-installed yet. Run the built **TMflash.app** and allow its Location Services
-prompt: macOS requires this permission to reveal network names. TMflash does
-not request location updates. If permission was denied, enable TMflash under
-**System Settings → Privacy & Security → Location Services**, then **Rescan**.
-The picker shows each SSID once and prefers 2.4 GHz when a name is broadcast
-on several bands. Networks seen only on 5 or 6 GHz remain visible but cannot
-be selected because TMsense's ESP32-S3 uses 2.4 GHz. It does not join a network
-or change the Mac's Wi-Fi.
-
-For a **phone hotspot**, turn on sharing and set its Wi-Fi band to **2.4 GHz**,
-then press **Rescan**. On a supported iPhone, open **Settings → Personal Hotspot**,
-enable **Allow Others to Join** and **Maximize Compatibility**, and leave that
-settings screen open until the node connects. TMflash's **Phone hotspot not listed?**
-link shows these steps in the app. A hotspot visible on 5 GHz alone must switch
-bands before a TMsense can join it.
-
-Use **Enter SSID manually…** for a hidden network, a site outside the Mac's
-range, or when scanning is unavailable. **Keep node’s current network** leaves
-the saved SSID untouched. A rescan never changes your selection. The selected
-SSID and entered password are provisioned over USB after flashing; in batch
-mode they apply to every selected board.
-
-**TMedge admission**
-
-In **Security & verification**, enable **Adopt a new device with my algo account** for a new board. Set the console URL
-to `https://algo.hkumyseat.com`, then click **Sign in with algo**.
-Complete the existing browser sign-in and authorize TMflash. No service token
-or copied provisioning token is needed. Your password stays in the browser;
-an expiring 24-hour session stays in the Mac's Keychain.
-
-**Check access** checks account access and persistent registration storage. This same
-check must pass before any USB write or firmware flashing. A sign-in page,
-redirect, refusal or malformed response fails the job. HTTPS is required
-except for loopback fixtures or SSH tunnels.
-
-After flashing, compare the device UID and request code shown in TMflash with
-the **Adoption** tab in the algo console. Type both to approve that physical
-device. It remains unplaced until an operator installs it in the floor plan.
-For direct cloud, success also requires a fresh report ACK from the rebooted
-board. Wi-Fi connection or approval alone cannot pass verification.
-
-Sign out in TMflash or revoke its session in Adoption to end access. Account
-removal and password changes invalidate it immediately. The CLI's `--adopt`
-uses the account session from TMflash.app's Keychain; it asks macOS for access
-when needed. Legacy `TMFLASH_TOKEN` CLI configuration remains supported for
-existing integrations, but is not required for the app.
-
-See [the verification pipeline](docs/TOKEN_PIPELINE.md) for deployment
-requirements and the remaining public verification step.
-
-**Batch**
-
-Tick the boards, then enter **Node IDs from … to …**. The range must hold
-exactly as many IDs as there are ticked boards. Each board shows its ID badge
-before you start. They're flashed and checked in parallel, and a failure on
-one board never stops the others.
-
-The available batch size follows the USB boards detected by the Mac, including
-boards connected through hubs. **Select all** selects every detected board,
-and the device counter shows selected / detected boards. There is no fixed
-10-board cap; the host's USB connections and resources determine how many
-boards can be used. Node IDs must still be distinct and within 1–65535.
-
-**Results**
-
-Each node ends up in one of three states:
-
-- ✔ Green: the settings were verified and the node joined Wi-Fi. Its IP is
-  shown.
-- ✔ Orange: set up as asked, but with something to check. For example, it
-  didn't join Wi-Fi within 30 s (wrong password or out of range), or it has
-  no signing key, which means TMedge will reject its packets.
-- ✖ Red: it failed, and the reason is shown. If esptool can't connect,
-  hold **PRG**, tap **RST**, and try again.
-
-Every result is appended to the **manifest**,
-`~/Library/Application Support/TMflash/manifest.csv`, with columns node ID,
-MAC, mode, gateway, SSID, firmware, port, IP and result. TMedge identifies
-nodes by MAC in `config/nodes.json`, so this ID ↔ MAC list is what you need
-to register new nodes. **Show manifest** opens it.
-
-**Handy details**
-
-- **Blank fields keep what the node already has.** Re-flashing firmware
-  doesn't make you re-type a password.
-- **Settings only**: TMflash only updates the settings on a board that
-  already runs TMsense 1.1 or newer.
-- The Wi-Fi password and key can be remembered in the login **Keychain**.
-  Nothing secret is written to disk, shown in the log or put in the
-  manifest.
-
-## How it works
-
-```
-TMflash.app (SwiftUI)          tmflash-cli
-        └──────────┬───────────────┘
-              TMflashCore
-   ┌───────────────┼──────────────────┬───────────────────┐
-SerialDevices   FirmwareProject      Flasher           NodeConsole
-(IOKit: USB     (pio run -e tmflash; (esptool.py from   (TMsense serial console:
- serial ports,   pio project metadata  PlatformIO,        show / set / save /
- one per board)  → images + offsets)   parallel, per port) reboot, then verify)
-```
-
-- **One image, no per-node compile.** The same binary goes on every node.
-  Everything that differs between nodes is written afterwards through the
-  firmware's serial console (`set id 3`, `set mode wifi`, `set ssid …`,
-  `set pass …`, `set edges …`, `set key …`, `save`), the same commands a
-  person could type. The node stores them in NVS.
-- **A release image with no secrets in it.** The `[env:tmflash]` build of
-  TMsense defines `TM_NO_NODE_CONFIG`, which ignores the bench defaults in
-  `include/node_config.h`. A flashed binary never carries a Wi-Fi password
-  or key.
-- **Nothing is erased.** esptool writes the bootloader, partition table,
-  boot_app0 and application at the offsets PlatformIO reports. It never
-  runs `erase_flash`, so the node's NVS survives, including its **boot
-  counter**. Resetting that counter would make the node's packets look like
-  replays to TMedge.
-- **Parallel.** Each board gets its own esptool process, then its own
-  serial session on a background thread. Builds happen once per run.
-- **Verification is by reading back.** After `save`, TMflash sends `show` and
-  compares the node ID, mode, SSID and gateway. The firmware never prints
-  secrets, so for the password and key it checks that they are *set*. It
-  then sends `reboot` and watches for `[wifi] connected ip=…`.
-- **Detection** uses IOKit to list USB serial ports with their vendor and
-  product IDs, recognising CP210x, CH34x, FTDI and Espressif native USB.
-  When two drivers expose the same board, it is collapsed to one entry by
-  USB location.
-
-### Command line
-
-The same engine, for scripts. Secrets come only from environment variables,
-never from arguments, which would end up in shell history and `ps`:
-
-```sh
-CLI=build/TMflash.app/Contents/MacOS/tmflash-cli      # or: swift run tmflash-cli
-$CLI ports --probe
-TMFLASH_PASSWORD=… TMFLASH_KEY=… $CLI flash --port /dev/cu.usbserial-0001 --id 3 \
-    --ssid ExampleWiFi --gateway 192.0.2.10 --fps 2
-TMFLASH_PASSWORD=… TMFLASH_KEY=… $CLI batch --ports /dev/cu.usbserial-0001,/dev/cu.usbserial-0002 \
-    --start 11 --end 12 --ssid ExampleWiFi --gateway 192.0.2.10 --fps 4
-```
-
-`--fps` accepts only `1`, `2` or `4`. Omit it to keep the node's current rate.
-With `--no-flash`, rate selection requires TMsense 1.6 or newer already on the
-board; older firmware is refused before any settings are written.
-
-Set both `TMEDGE_URL` and `TMFLASH_TOKEN` in the environment to request edge
-admission from the CLI. Supplying only one is an error before building or
-flashing. Omit both when updating an already registered board.
-
-## Tests
-
-```sh
-swift test
-```
-
-These tests check claims about behaviour. The pipeline tests run the real
-serial code against **fake TMsense nodes on pseudo-terminals**, which speak
-the firmware's console. They cover:
-
-- sixteen boards at once, each getting its own ID;
-- one bad board not stopping the others;
-- a silent board failing instead of hanging;
-- secrets never reaching the log;
-- LoRa mode storing its gateway and warning that it can't send yet.
-
-Other tests cover:
-
-- ID ranges and validation;
-- esptool progress and metadata parsing;
-- that TMflash never erases flash;
-- collapsing a board that appears under two drivers.
-- Wi-Fi band filtering, duplicate SSIDs, exact SSID bytes, permission and scan
-  failures, and provisioning a scanned SSID through a fake node.
-- frame-rate readback, persistence, old-firmware refusal and invalid rates;
-- token refusal, sign-in pages, malformed responses, admission polling and
-  credential changes invalidating a previous verification result.
-
-To check the UI without hardware:
-
-```sh
-swift build && .build/debug/TMflash --snapshot /tmp/s.png --scene batch --dark
-# scenes: single, fps1, fps2, fps4, batch, batch-large, lora, cloud, cloud-done, running, done, empty, hotspot, wifi-scanning, wifi-empty, wifi-denied
-```
-
-## Continuous integration
-
-CI runs the fake serial-node tests and release builds on macOS. It does not
-connect to hardware or flash devices.
-
-Default-branch changes go through a pull request with required checks.
-GitHub Actions dependencies are pinned and updated through Dependabot PRs.
+- [Sources/TMflash/](Sources/TMflash/) contains the SwiftUI screens, app state, Wi-Fi permission handling, and snapshot rendering.
+- [Sources/TMflashCore/](Sources/TMflashCore/) contains hardware communication and the shared provisioning pipeline.
+- [Sources/tmflash-cli/](Sources/tmflash-cli/) exposes the same operations to scripts.
+- [Tests/](Tests/) covers guided setup, route-specific writes, account sign-in, batch isolation, validation, serial behavior, capability negotiation, device deduplication, and Wi-Fi selection.
+- [scripts/](scripts/) packages the application and CLI into a macOS app bundle.
