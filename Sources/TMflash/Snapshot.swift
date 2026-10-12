@@ -26,7 +26,7 @@ enum Snapshot {
         let view = NSHostingView(rootView: ContentView().environmentObject(model))
         // A taller window for scenes whose form runs past the usual height,
         // so a snapshot shows the whole of it rather than a cropped hint.
-        let size = NSSize(width: 900, height: scene == "tall" ? 1250 : 800)
+        let size = NSSize(width: 900, height: ["tall", "account-login"].contains(scene) ? 1350 : 800)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = view
@@ -48,11 +48,16 @@ enum Snapshot {
         m.settings = NodeSettings(mode: .wifi, ssid: "EsanHouse", password: "password1", gateway: "192.168.0.43", key: "k")
         m.wifi.networks = [WiFiNetwork(ssid: m.settings.ssid, rssi: -42), WiFiNetwork(ssid: "Lab 2.4 GHz", rssi: -66)]
         m.wifi.state = .ready
-        if scene == "tall" {
+        if scene == "fps1" { m.settings.frameRate = .fps1 }
+        if scene == "fps2" { m.settings.frameRate = .fps2 }
+        if scene == "fps4" { m.settings.frameRate = .fps4 }
+        if scene == "tall" || scene == "account-login" {
             m.registerWithEdge = true
-            m.edgeURL = "https://sense.hkumyseat.com"
-            m.edgeToken = String(repeating: "t", count: 32)
-            m.edgeCheck = "Connected. The token is accepted."
+            m.edgeURL = "https://algo.hkumyseat.com"
+            if scene == "tall" {
+                m.edgeSession = FlasherSession(id: "preview", token: "tmflash_" + String(repeating: "a", count: 64), user: "bench", expiresAt: Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000), url: m.edgeURL)
+                m.edgeCheck = "Connected. Console access is verified. Adoption is ready."
+            }
         }
         if scene == "hotspot" {
             m.settings.ssid = ""

@@ -23,6 +23,9 @@ public struct NodeInfo: Equatable, Sendable {
     public var capabilities: Set<String> { Set((fields["caps"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }) }
     /// The firmware has the direct-to-cloud transport and its settings.
     public var supportsDirectCloud: Bool { capabilities.contains("wss1") }
+    public var supportsFrameRate: Bool { capabilities.contains("fps1") }
+    /// Configured complete-frame rate; measured fps is reported separately in telemetry.
+    public var frameRate: FrameRate? { fields["fps"].flatMap(Int.init).flatMap(FrameRate.init(rawValue:)) }
     /// No `transport` line means firmware from before direct cloud: UDP.
     public var transport: UplinkTransport { fields["transport"].flatMap(UplinkTransport.init(rawValue:)) ?? .udp }
     public var cloudURL: String? { fields["cloud_url"].flatMap { $0 == "(none)" ? nil : $0 } }
@@ -44,6 +47,9 @@ public struct NodeInfo: Equatable, Sendable {
         var errors: [String] = [], warnings: [String] = []
         if nodeID != id { errors.append("node ID reads \(fields["node_id"] ?? "nothing"), expected \(id)") }
         if mode != s.mode { errors.append("mode reads \(fields["mode"] ?? "nothing"), expected \(s.mode.rawValue)") }
+        if let fps = s.frameRate, frameRate != fps {
+            errors.append("frame rate reads \(fields["fps"] ?? "nothing"), expected \(fps.title)")
+        }
         switch s.mode {
         case .wifi:
             if !s.ssid.isEmpty && ssid != s.ssid { errors.append("SSID was not stored") }

@@ -18,6 +18,13 @@ public enum UplinkTransport: String, Codable, CaseIterable, Sendable {
     public var title: String { self == .udp ? "Local gateway (UDP)" : "Direct to cloud (WSS)" }
 }
 
+/// Complete thermal frames per second, rather than the MLX subpage refresh code.
+public enum FrameRate: Int, Codable, CaseIterable, Sendable {
+    case fps1 = 1, fps2 = 2, fps4 = 4
+
+    public var title: String { "\(rawValue) fps" }
+}
+
 /// What gets written to a TMsense node. An empty string means "keep what the
 /// node already has", so re-flashing firmware never forces anyone to re-type
 /// a password, and a fresh node is caught by verification instead.
@@ -35,9 +42,11 @@ public struct NodeSettings: Equatable, Codable, Sendable {
     /// TMedge's node endpoint for `.wss`, e.g. wss://sense.example.com/tmnode.
     /// Blank keeps what the node has.
     public var cloudURL: String = ""
+    /// Nil keeps the node's current rate, including when re-flashing it.
+    public var frameRate: FrameRate?
 
     public init(mode: UplinkMode = .wifi, ssid: String = "", password: String = "", gateway: String = "", key: String = "",
-                transport: UplinkTransport = .udp, cloudURL: String = "") {
+                transport: UplinkTransport = .udp, cloudURL: String = "", frameRate: FrameRate? = nil) {
         self.mode = mode
         self.ssid = ssid
         self.password = password
@@ -45,9 +54,10 @@ public struct NodeSettings: Equatable, Codable, Sendable {
         self.key = key
         self.transport = transport
         self.cloudURL = cloudURL
+        self.frameRate = frameRate
     }
 
-    enum CodingKeys: String, CodingKey { case mode, ssid, password, gateway, key, transport, cloudURL }
+    enum CodingKeys: String, CodingKey { case mode, ssid, password, gateway, key, transport, cloudURL, frameRate }
 
     /// Settings saved before direct cloud existed have no transport or URL:
     /// they decode as the UDP they always were.
@@ -60,6 +70,7 @@ public struct NodeSettings: Equatable, Codable, Sendable {
         key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
         transport = try c.decodeIfPresent(UplinkTransport.self, forKey: .transport) ?? .udp
         cloudURL = try c.decodeIfPresent(String.self, forKey: .cloudURL) ?? ""
+        frameRate = try c.decodeIfPresent(FrameRate.self, forKey: .frameRate)
     }
 
     // Limits mirror TMsense's TmSettings buffers and its 160-byte console line.
@@ -210,6 +221,9 @@ public struct ConsoleCommand: Equatable, Sendable {
             if !s.gateway.isEmpty { out.append(.init(line: "set lora_gw \(s.gateway)", expect: "lora_gw updated", display: "set lora_gw \(s.gateway)")) }
         }
         if !s.key.isEmpty { out.append(.init(line: "set key \(s.key)", expect: "key updated", display: "set key ••••••")) }
+        if let fps = s.frameRate {
+            out.append(.init(line: "set fps \(fps.rawValue)", expect: "fps updated", display: "set fps \(fps.rawValue)"))
+        }
         out.append(.init(line: "save", expect: "saved", display: "save"))
         return out
     }

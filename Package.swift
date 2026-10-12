@@ -12,7 +12,7 @@ let package = Package(
         // Everything that talks to hardware or tools: ports, build, esptool,
         // the node's serial console. The app and the CLI are thin shells on it.
         .target(name: "TMflashCore", linkerSettings: [.linkedFramework("IOKit"), .linkedFramework("Security"), .linkedFramework("CoreWLAN")]),
-        .executableTarget(name: "TMflash", dependencies: ["TMflashCore"], linkerSettings: [.linkedFramework("CoreLocation")]),
+        .executableTarget(name: "TMflash", dependencies: ["TMflashCore"], linkerSettings: [.linkedFramework("CoreLocation"), .linkedFramework("AuthenticationServices")]),
         .executableTarget(name: "tmflash-cli", dependencies: ["TMflashCore"]),
         .testTarget(name: "TMflashCoreTests", dependencies: ["TMflashCore"]),
         .testTarget(name: "TMflashAppTests", dependencies: ["TMflash"]),

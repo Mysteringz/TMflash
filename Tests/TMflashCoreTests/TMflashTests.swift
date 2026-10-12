@@ -215,6 +215,7 @@ final class DirectCloudTests: XCTestCase {
     private func node(_ uid: String, cloud: Bool = true) throws -> FakeNode {
         let f = try FakeNode(uid: uid)
         f.directCloud = cloud
+        f.frameRateSelection = false
         f.start()
         return f
     }
