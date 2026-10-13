@@ -63,10 +63,6 @@ public struct FirmwareBuild: Equatable, Sendable {
     public let images: [FlashImage]
     public let version: String?
 
-    public var totalBytes: Int {
-        images.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? Int) ?? 0) }
-    }
-
     /// esptool arguments for one port. `--before default_reset` puts the chip
     /// in its bootloader via DTR/RTS; `--after hard_reset` starts the new
     /// firmware. No erase: the node's saved settings and boot counter live in
